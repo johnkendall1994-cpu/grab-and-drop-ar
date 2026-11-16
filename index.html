@@ -1233,24 +1233,61 @@ function flick(it, dir) {
   b.angularVelocity.set((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8);
   buzz(10);
 }
-function placeAtReticle(sx, sy) {
-  let p = null, onScan = false;
-  if (sx !== undefined && haveCam) { p = voxRay(camPos, screenRay(sx, sy)); onScan = !!p; }
-  if (!p) {
-    if (!reticle.visible) { showHint('No surface yet. Move your phone slowly over the floor or a table', 1800); return; }
-    p = new T.Vector3().setFromMatrixPosition(reticle.matrix);
-    onScan = voxSurfaceY(p.x, p.z, p.y + 0.1) !== null;
+// Taps are handled inside the next AR frame, where the depth sensor can be read at the tapped spot
+let pendingPlace = null;
+function placeAtReticle(sx, sy) { pendingPlace = { x: sx === undefined ? innerWidth / 2 : sx, y: sy === undefined ? innerHeight / 2 : sy }; }
+function burstScan(info, nx, ny, now) {
+  // Map the area around the tap immediately so the item lands on the real shape right away
+  if (!VOX.enabled || floorY === null) return;
+  if (VOX.y0 === null) VOX.y0 = floorY + 0.025;
+  const fwd = viewFwd(), q = new T.Vector3();
+  _ck = NaN; _cc = null;
+  for (let a = -6; a <= 6; a++) for (let b = -6; b <= 6; b++) {
+    const x = nx + a * 0.012, y = ny + b * 0.008;
+    const d = depthAt(info, x, y); if (!(d > 0.15 && d < 3.5)) continue;
+    const dir = ndcRay(x * 2 - 1, 1 - y * 2), cosA = dir.dot(fwd); if (cosA < 0.2) continue;
+    q.copy(camPos).addScaledVector(dir, d / cosA);
+    if (q.y < floorY + 0.025 || q.y > floorY + 2.5) continue;
+    voxVote(q.x, q.y, q.z, HIT * 2);
   }
-  if (!onScan) { ensureSlab(p.x, p.y, p.z); if (voxReady()) showHint('Scanning… move your phone around here so it lands on the real shape', 2200); }
+  for (const c of VOX.chunks.values()) if (c.dirty) rebuildChunk(c, now);
+}
+function placeAt(pt, info, now) {
+  if (!haveCam) return;
+  const dir = screenRay(pt.x, pt.y);
+  let p = voxRay(camPos, dir), how = p ? 'surface' : null;
+  if (!p && info) {
+    const nx = pt.x / innerWidth, ny = pt.y / innerHeight, d = depthAt(info, nx, ny);
+    if (d > 0.15 && d < 4) {
+      p = camPos.clone().addScaledVector(dir, d / Math.max(0.2, dir.dot(viewFwd())));
+      how = 'surface';
+      burstScan(info, nx, ny, now);
+      const vy = voxRay(camPos, dir); if (vy) p = vy;
+    }
+  }
+  if (!p && reticle.visible) {
+    // the plane under the ring, if the tap lands on it
+    const rp = new T.Vector3().setFromMatrixPosition(reticle.matrix);
+    if (Math.abs(dir.y) > 0.05) { const t = (rp.y - camPos.y) / dir.y; if (t > 0.1 && t < 5) { p = camPos.clone().addScaledVector(dir, t); how = 'surface'; } }
+  }
+  if (!p) { p = camPos.clone().addScaledVector(dir, 0.5); how = 'air'; }
+  if (floorY !== null) p.y = Math.max(p.y, floorY);
   const sc = SIZES[sizeIdx].s, spec = SPECS[selected];
   const fwd = new T.Vector3(p.x - camPos.x, 0, p.z - camPos.z); if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); fwd.normalize();
   sfx.place(); buzz(12);
-  if (spec.kind === 'set') { spec.place(p, fwd, sc); return; }
+  if (spec.kind === 'set') {
+    const g = new T.Vector3(p.x, how === 'air' ? Math.max(surfaceY(p.x, p.z, p.y + 0.01), floorY ?? p.y - 1) : p.y, p.z);
+    if (floorY !== null && g.y > floorY + 0.12 && voxSurfaceY(g.x, g.z, g.y + 0.05) === null) ensureSlab(g.x, g.y, g.z);
+    spec.place(g, fwd, sc); return;
+  }
   const yaw = Math.atan2(camPos.x - p.x, camPos.z - p.z) + (Math.random() - 0.5) * 0.5;
   const it = spawnSpec(spec, sc, new T.Vector3(p.x, p.y + 0.3, p.z), qY(yaw));
-  it.body.updateAABB();
-  const half = (it.body.aabb.upperBound.y - it.body.aabb.lowerBound.y) / 2;
-  it.body.position.y = p.y + half + 0.015;
+  if (how === 'air') it.body.position.set(p.x, p.y, p.z);
+  else {
+    it.body.updateAABB();
+    const half = (it.body.aabb.upperBound.y - it.body.aabb.lowerBound.y) / 2;
+    it.body.position.set(p.x, p.y + half + 0.02, p.z);
+  }
   it.wob = 0.2 * (spec.wobble || 0); it.wobT = 0;
 }
 
@@ -1269,7 +1306,7 @@ function startGrab(it, mode, handPoint) {
   const hRel = mode === 'hand' ? hand.q.clone().invert().multiply(bodyQuat(b)) : null;
   held = { item: it, mode, local, len, baseLen: len, relQ, hRel, hist: [], offset: handPoint ? bodyPos(b).sub(handPoint) : null };
   sfx.grab(); buzz(28);
-  if (mode === 'phone') showHint(it.spec.edible ? 'Drag down to pull it to your mouth. Let go to drop, flick to throw' : 'Move your phone to carry it. Let go to drop, flick to throw', 2600);
+  if (mode === 'phone') showHint(it.spec.edible || it.spec === SPECS.soda ? 'Move your phone to carry it. Tap with another finger to take a bite. Let go to drop, flick to throw' : 'Move your phone to carry it. Let go to drop, flick to throw', 2600);
   else showHint('Got it! Open your hand to drop, fling to throw', 2000);
 }
 function releaseGrab(extraV) {
@@ -1994,7 +2031,13 @@ function showHint(text, ms) { const h = $('hint'); h.textContent = text; hintLoc
 const touch = $('touch');
 let pDown = null;
 touch.addEventListener('pointerdown', e => {
-  if (pDown) return;
+  if (pDown) {
+    if (held && held.mode === 'phone' && e.pointerId !== pDown.id) {
+      const it = held.item;
+      if (it.spec.edible) bite(it); else if (it.spec === SPECS.soda) sip(it);
+    }
+    return;
+  }
   $('settings').style.display = 'none';
   const it = pickScreen(e.clientX, e.clientY);
   pDown = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), item: it, moved: false, timer: null, path: [{ x: e.clientX, y: e.clientY, t: performance.now() }] };
@@ -2005,12 +2048,7 @@ touch.addEventListener('pointerdown', e => {
 touch.addEventListener('pointermove', e => {
   if (!pDown || e.pointerId !== pDown.id) return;
   const now = performance.now();
-  if (held && held.mode === 'phone') {
-    held.curY = e.clientY;
-    held.len = clamp(held.baseLen - (e.clientY - held.startY) * 0.0035, 0.08, 2.5);
-    held.local.setLength(held.len);
-    return;
-  }
+  if (held && held.mode === 'phone') return;
   pDown.path.push({ x: e.clientX, y: e.clientY, t: now });
   if (Math.hypot(e.clientX - pDown.x, e.clientY - pDown.y) > 16) { pDown.moved = true; clearTimeout(pDown.timer); }
   if (pDown.moved) trail.push({ x: e.clientX, y: e.clientY, t: now });
@@ -2125,6 +2163,7 @@ renderer.setAnimationLoop((t, frame) => {
           scanRoom(depthInfo, now);
         }
       }
+      if (pendingPlace) { const pp = pendingPlace; pendingPlace = null; placeAt(pp, depthInfo, now); }
       const bl = frame.session.renderState.baseLayer;
       if (bl) occU.uRes.value.set(bl.framebufferWidth, bl.framebufferHeight);
       occU.uOcc.value = (depthInfo && opts.occlusion) ? 1 : 0;
@@ -2157,8 +2196,7 @@ renderer.setAnimationLoop((t, frame) => {
         $('hint').textContent = held ? (held.mode === 'hand' ? 'Turn your wrist to rotate. Open your hand to drop' : 'Let go to drop, flick to throw')
           : trashMode ? 'Trash mode: tap items to remove them'
           : (hand.enabled && hand.lm) ? (hand.hover ? (hand.hover.r > 0.13 ? `Make a fist to grab the ${hand.hover.spec.label.toLowerCase()}` : `Pinch to grab the ${hand.hover.spec.label.toLowerCase()}`) : handTray.active ? 'Palm up: things can sit in your hand' : 'Reach toward something. Pinch or make a fist')
-          : shown ? `Tap to place ${SPECS[selected].emoji} · swipe to slice · hold to grab`
-          : 'Point at the floor or a table and move your phone slowly';
+          : `Tap anywhere to place ${SPECS[selected].emoji} · swipe to slice · hold to grab`;
       }
     }
     ring.rotation.y += dt * 1.5;

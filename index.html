@@ -1893,11 +1893,8 @@ async function toggleHand() {
   if (!features.camera) { showHint('Hand tracking needs camera access for AR, which this phone or Chrome didn\'t allow. Update Chrome and try again', 3500); return; }
   if (!hand.mode) {
     hand.loading = true; setHandBtn(); showHint('Loading hand tracking…', 30000);
-    if (await startWorker()) hand.mode = 'worker';
-    else {
-      try { await startMainThread(); hand.mode = 'main'; }
-      catch (e) { hand.loading = false; setHandBtn(); showHint('Couldn\'t load hand tracking: ' + (e.message || e), 3500); return; }
-    }
+    try { await startMainThread(); hand.mode = 'main'; }
+    catch (e) { hand.loading = false; setHandBtn(); showHint('Couldn\'t load hand tracking: ' + (e.message || e), 3500); return; }
     hand.loading = false;
   }
   if (!palmBody) {
@@ -1928,7 +1925,7 @@ function initReadback(w, h) {
   const fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  const webgl2 = typeof gl.fenceSync === 'function';
+  const webgl2 = false; // read the frame immediately so landmarks match what's on screen
   let pbo = null;
   if (webgl2) { pbo = gl.createBuffer(); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo); gl.bufferData(gl.PIXEL_PACK_BUFFER, w * h * 4, gl.STREAM_READ); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); }
   rb = { gl, prog, buf, tex, fb, w, h, pbo, webgl2, sync: null, out: new Uint8Array(w * h * 4), spare: null,
@@ -1938,7 +1935,7 @@ function initReadback(w, h) {
 function captureFrame(cam) {
   const tex = glBinding.getCameraImage(cam);
   if (!tex) return false;
-  const W = 288, H = Math.round(288 * cam.height / cam.width);
+  const W = 224, H = Math.round(224 * cam.height / cam.width);
   if (!rb || rb.w !== W || rb.h !== H) initReadback(W, H);
   const gl = rb.gl;
   if (gl.bindVertexArray) gl.bindVertexArray(null);
@@ -1993,7 +1990,8 @@ function deliverFrame(now) {
 function handFrameStep(cam, depthInfo, now) {
   try {
     if (pollReadback()) deliverFrame(now);
-    if (!hand.busy && !(rb && rb.sync)) { if (captureFrame(cam)) deliverFrame(now); }
+    hand.frameN = (hand.frameN || 0) + 1;
+    if (hand.frameN % 2 === 0 && !hand.busy && !(rb && rb.sync)) { if (captureFrame(cam)) deliverFrame(now); }
   } catch (e) { console.warn(e); renderer.resetState(); }
   if (hand.pending) { const r = hand.pending; hand.pending = null; processHand(r, depthInfo, now); }
 }
@@ -2022,12 +2020,8 @@ function processHand(res, depthInfo, now) {
   hand.depth = hand.depth ? lerp(hand.depth, d, 0.5) : d;
   const wc = (wl[0].z + wl[5].z + wl[9].z + wl[13].z + wl[17].z) / 5;
   const p3T = [];
-  for (let k = 0; k < 21; k++) {
-    let z = hand.depth + (wl[k].z - wc);
-    if (TIPS.includes(k)) { const dk = depthAt(depthInfo, lm[k].x, lm[k].y); if (dk > 0.08 && Math.abs(dk - z) < 0.06) z = dk * 0.6 + z * 0.4; }
-    p3T.push(lmPoint(lm[k], z));
-  }
-  hand.p3T = p3T;
+  for (let k = 0; k < 21; k++) p3T.push(lmPoint(lm[k], hand.depth));
+  hand.p3T = p3T; hand.wl = wl;
   hand.lmT = lm.map(p => ({ x: p.x, y: p.y }));
   if (!hand.p3) { hand.p3 = p3T.map(p => p.clone()); hand.lm = hand.lmT.map(p => ({ ...p })); hand.anchorPrev = null; }
   // Grips: fist beats pinch
@@ -2056,14 +2050,14 @@ function findHandTarget(grip) {
 const _m4 = new T.Matrix4(), _x = new T.Vector3(), _y = new T.Vector3(), _z = new T.Vector3();
 function updateHand(dt, now) {
   if (!hand.enabled || !hand.p3 || !hand.p3T) { setHandColliders(false, dt); occU.uHandOn.value = 0; return; }
-  const a = 1 - Math.pow(0.00002, dt);
-  for (let k = 0; k < 21; k++) { hand.p3[k].lerp(hand.p3T[k], a); hand.lm[k].x = lerp(hand.lm[k].x, hand.lmT[k].x, a); hand.lm[k].y = lerp(hand.lm[k].y, hand.lmT[k].y, a); }
-  const P = hand.p3;
+  for (let k = 0; k < 21; k++) { hand.p3[k].copy(hand.p3T[k]); hand.lm[k].x = hand.lmT[k].x; hand.lm[k].y = hand.lmT[k].y; }
+  const P = hand.p3, wl = hand.wl;
   hand.palmC.copy(P[0]).add(P[5]).add(P[9]).add(P[13]).add(P[17]).multiplyScalar(0.2);
-  _y.copy(P[9]).sub(P[0]).normalize();
-  _x.copy(P[5]).sub(P[17]); _z.crossVectors(_x, _y).normalize(); _x.crossVectors(_y, _z).normalize();
+  const toW = (a, b) => new T.Vector3(b.x - a.x, -(b.y - a.y), -(b.z - a.z)).applyQuaternion(camQuat);
+  _y.copy(toW(wl[0], wl[9])).normalize();
+  _x.copy(toW(wl[17], wl[5])); _z.crossVectors(_x, _y).normalize(); _x.crossVectors(_y, _z).normalize();
   _m4.makeBasis(_x, _y, _z); hand.qT.setFromRotationMatrix(_m4);
-  if (!hand.qInit) { hand.q.copy(hand.qT); hand.qInit = true; } else hand.q.slerp(hand.qT, a);
+  if (!hand.qInit) { hand.q.copy(hand.qT); hand.qInit = true; } else hand.q.slerp(hand.qT, 0.5);
   hand.xAx.copy(_x);
   hand.palmN.copy(_z.y >= 0 ? _z : _z.negate());
   hand.pinchP.copy(P[4]).add(P[8]).multiplyScalar(0.5);
@@ -2084,7 +2078,7 @@ function updateHand(dt, now) {
   }
   hand.hover = held ? null : findHandTarget(hand.fistOn ? 'fist' : 'pinch');
   setHandColliders(true, dt);
-  drawHandMask();
+  occU.uHandOn.value = 0;
 }
 function setHandColliders(on, dt) {
   if (!palmBody) return;

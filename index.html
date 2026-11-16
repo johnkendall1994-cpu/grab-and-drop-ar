@@ -35,7 +35,9 @@
   #hint { position: absolute; top: 66px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 92%;
     text-align: center; font-size: 14px; padding: 8px 14px; border-radius: 999px;
     background: rgba(18,14,32,.62); pointer-events: none; }
-  #bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 8px;
+  #score { position: absolute; top: 108px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 92%;
+    font-size: 14px; font-weight: 700; padding: 7px 14px; border-radius: 999px; background: rgba(209,36,43,.85); display: none; pointer-events: auto; }
+  #bar { touch-action: pan-x; position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 8px;
     padding-bottom: max(12px, env(safe-area-inset-bottom)); display: flex; gap: 8px; overflow-x: auto;
     background: linear-gradient(transparent, rgba(8,6,16,.78)); scrollbar-width: none; }
   #bar::-webkit-scrollbar { display: none; }
@@ -94,10 +96,13 @@
       <button class="btn" id="setBtn">⚙</button>
     </div>
     <div id="hint">Point at the floor or a table and move your phone slowly</div>
+    <div id="score"></div>
     <div class="panel" id="settings">
       <div class="row"><span>Hide behind real objects</span><button class="tog on" data-k="occlusion"></button></div>
       <div class="row"><span>3D room scan physics</span><button class="tog on" data-k="obstacles"></button></div>
       <div class="row"><span>Show room scan</span><button class="tog" data-k="showScan"></button></div>
+      <div class="row"><span>Scan sensitivity</span><button class="btn" id="scanLvlBtn" style="height:34px;min-width:80px">High</button></div>
+      <div class="row"><span>Fine detail (2 cm, heavier)</span><button class="tog" data-k="fine"></button></div>
       <div class="row"><span>Hand pushes objects</span><button class="tog on" data-k="handPush"></button></div>
       <div class="row"><span>Flip hand camera (if hand dots are upside-down)</span><button class="tog" data-k="flipCam"></button></div>
       <div class="row"><span>Sounds</span><button class="tog on" data-k="sound"></button></div>
@@ -129,7 +134,7 @@ const Y = new T.Vector3(0, 1, 0);
 const qY = a => new T.Quaternion().setFromAxisAngle(Y, a);
 const qZ = a => new T.Quaternion().setFromAxisAngle(new T.Vector3(0, 0, 1), a);
 
-const opts = { occlusion: true, obstacles: true, showScan: false, handPush: true, flipCam: false, sound: true };
+const opts = { scanLevel: 'high', fine: false, occlusion: true, obstacles: true, showScan: false, handPush: true, flipCam: false, sound: true };
 const features = { light: false, depth: false, camera: false, overlay: false };
 
 /* ============================== Renderer & scene ============================== */
@@ -904,7 +909,166 @@ SPECS.dominoes = { label: 'Dominoes', emoji: '🁫', kind: 'set', place: (p, fwd
   }
   showHint('Tap the first domino to start the chain', 2500);
 } };
-const MENU = ['pizza', 'burger', 'donut', 'apple', 'orange', 'banana', 'watermelon', 'cake', 'pancakes', 'jelly', 'soda', 'glass', 'plate', 'bowl', 'ball', 'bowling', 'pins', 'jenga', 'dominoes'];
+/* ============================== Darts ============================== */
+const DART_ORDER = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5];
+const BOARD_R = 0.2255;
+const qX = a => new T.Quaternion().setFromAxisAngle(new T.Vector3(1, 0, 0), a);
+function dartboardTex() {
+  return canvasTex('dartboard', 1024, 1024, (g, w, h) => {
+    const cx = w / 2, cy = h / 2, S = (w / 2) / BOARD_R;
+    g.fillStyle = '#121212'; g.beginPath(); g.arc(cx, cy, w / 2, 0, Math.PI * 2); g.fill();
+    const sector = (r0, r1, a0, a1, col) => { g.fillStyle = col; g.beginPath(); g.arc(cx, cy, r1 * S, a0, a1); g.arc(cx, cy, r0 * S, a1, a0, true); g.closePath(); g.fill(); };
+    const D = Math.PI / 180;
+    for (let i = 0; i < 20; i++) {
+      const a0 = (-90 - 9 + i * 18) * D, a1 = a0 + 18 * D;
+      const single = i % 2 === 0 ? '#1b1b1b' : '#efe2c0', ring = i % 2 === 0 ? '#d1242b' : '#16803c';
+      sector(0.0159, 0.099, a0, a1, single); sector(0.099, 0.107, a0, a1, ring);
+      sector(0.107, 0.162, a0, a1, single); sector(0.162, 0.170, a0, a1, ring);
+    }
+    g.fillStyle = '#16803c'; g.beginPath(); g.arc(cx, cy, 0.0159 * S, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#d1242b'; g.beginPath(); g.arc(cx, cy, 0.00635 * S, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = 'rgba(210,210,215,.85)'; g.lineWidth = 2.2;
+    for (const r of [0.00635, 0.0159, 0.099, 0.107, 0.162, 0.170]) { g.beginPath(); g.arc(cx, cy, r * S, 0, Math.PI * 2); g.stroke(); }
+    for (let i = 0; i < 20; i++) { const a = (-90 - 9 + i * 18) * D; g.beginPath(); g.moveTo(cx + Math.cos(a) * 0.0159 * S, cy + Math.sin(a) * 0.0159 * S); g.lineTo(cx + Math.cos(a) * 0.170 * S, cy + Math.sin(a) * 0.170 * S); g.stroke(); }
+    g.fillStyle = '#f2f2f2'; g.font = '700 54px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    for (let i = 0; i < 20; i++) { const a = (-90 + i * 18) * D; g.fillText(String(DART_ORDER[i]), cx + Math.cos(a) * 0.196 * S, cy + Math.sin(a) * 0.196 * S); }
+  });
+}
+function dartModel(s, col) {
+  const g = new T.Group();
+  const tip = new T.Mesh(new T.ConeGeometry(0.0013 * s, 0.026 * s, 10), M.metal()); tip.rotation.x = -Math.PI / 2; tip.position.z = -0.062 * s; g.add(tip);
+  const barrel = new T.Mesh(new T.CylinderGeometry(0.0034 * s, 0.003 * s, 0.045 * s, 16), MAT('tungsten', { color: 0x8c929c, metalness: 1, roughness: 0.32 }));
+  barrel.rotation.x = Math.PI / 2; barrel.position.z = -0.03 * s; g.add(barrel);
+  for (let k = 0; k < 4; k++) { const rg = new T.Mesh(new T.TorusGeometry(0.0034 * s, 0.0005 * s, 4, 16), M.metal()); rg.position.z = (-0.045 + k * 0.009) * s; g.add(rg); }
+  const shaft = new T.Mesh(new T.CylinderGeometry(0.0021 * s, 0.0021 * s, 0.04 * s, 10), MAT('shaft', { color: 0x222222, roughness: 0.3, clearcoat: 0.6 }));
+  shaft.rotation.x = Math.PI / 2; shaft.position.z = 0.012 * s; g.add(shaft);
+  const sh = new T.Shape(); sh.moveTo(0, 0); sh.lineTo(0.016 * s, 0.006 * s); sh.lineTo(0.016 * s, 0.03 * s); sh.lineTo(0, 0.036 * s); sh.lineTo(0, 0);
+  const fm = MAT('flight' + col, { color: col, roughness: 0.4, clearcoat: 0.5, side: T.DoubleSide });
+  for (let k = 0; k < 4; k++) {
+    const f = new T.Mesh(new T.ShapeGeometry(sh), fm);
+    f.rotation.x = Math.PI / 2; f.position.z = 0.022 * s;
+    const piv = new T.Group(); piv.add(f); piv.rotation.z = k * Math.PI / 2; g.add(piv);
+  }
+  g.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+SPECS.dartboard = base({ label: 'Dartboard', emoji: '🎯', kind: 'board', fixed: true, mass: 0, rest: 0.1, fric: 0.8, sound: 'wood',
+  build: s => {
+    const g = new T.Group(), R = BOARD_R * s, th = 0.04 * s;
+    const face = new T.Mesh(new T.CircleGeometry(R, 72), MAT('boardFace', () => ({ map: dartboardTex().map, roughness: 0.78 }))); face.position.z = th / 2; g.add(face);
+    const rim = new T.Mesh(new T.CylinderGeometry(R, R, th, 72, 1, true).rotateX(Math.PI / 2), MAT('boardRim', { color: 0x151515, roughness: 0.6 })); g.add(rim);
+    const back = new T.Mesh(new T.CircleGeometry(R, 48), MAT('boardBack', { color: 0x2a2a2a, roughness: 0.9 })); back.position.z = -th / 2; back.rotation.y = Math.PI; g.add(back);
+    return { g, shapes: [{ s: new C.Cylinder(R, R, th, 20), q: qX(Math.PI / 2) }], r: R };
+  },
+});
+SPECS.darts = { label: 'Darts', emoji: '📌', kind: 'darts' };
+SPECS.dart = base({ label: 'Dart', emoji: '📌', kind: 'object', mass: 0.022, rest: 0.15, fric: 0.5, sound: 'plastic', hidden: true,
+  build: s => ({ g: dartModel(s, 0xffb703), shapes: [boxS(0.004 * s, 0.004 * s, 0.06 * s)], r: 0.07 * s }) });
+const FLIGHT_COLS = [0xe63946, 0x2a9d8f, 0xffb703];
+const DARTS = { flying: [], stuck: [], turn: [], total: 0, view: null, viewCol: null, hideUntil: 0, n: 0 };
+function updateScoreChip() {
+  const chip = $('score'), boards = items.some(i => i.spec === SPECS.dartboard);
+  chip.style.display = (boards || selected === 'darts') ? 'block' : 'none';
+  const turn = DARTS.turn.reduce((a, b) => a + b.v, 0);
+  const last = DARTS.turn.length ? DARTS.turn[DARTS.turn.length - 1].t : '—';
+  chip.textContent = `🎯 ${last}  ·  Turn ${turn}${DARTS.turn.length >= 3 ? ' ✓' : ''}  ·  Total ${DARTS.total}`;
+}
+function scoreAt(x, y) {
+  const r = Math.hypot(x, y);
+  if (r <= 0.00635) return { t: 'Bullseye!', v: 50 };
+  if (r <= 0.0159) return { t: 'Bull', v: 25 };
+  if (r > 0.170) return { t: 'Miss', v: 0 };
+  const a = ((Math.atan2(x, y) * 180 / Math.PI) + 369) % 360, n = DART_ORDER[Math.floor(a / 18) % 20];
+  if (r >= 0.099 && r <= 0.107) return { t: `Triple ${n}`, v: n * 3 };
+  if (r >= 0.162) return { t: `Double ${n}`, v: n * 2 };
+  return { t: String(n), v: n };
+}
+function clearTurn() { for (const d of DARTS.stuck) scene.remove(d.m); DARTS.stuck.length = 0; DARTS.turn.length = 0; }
+function dartStart() { return new T.Vector3(0.035, -0.055, -0.2).applyQuaternion(camQuat).add(camPos); }
+function throwDart(dx, dy, ms) {
+  if (!haveCam) return;
+  if (!items.some(i => i.spec === SPECS.dartboard)) showHint('Tip: place a 🎯 Dartboard on a wall first', 2000);
+  if (DARTS.turn.length >= 3) clearTurn();
+  const speedPx = Math.hypot(dx, dy) / Math.max(40, ms);              // px per ms
+  const speed = clamp(speedPx * 6, 4, 13);
+  const right = new T.Vector3(1, 0, 0).applyQuaternion(camQuat), up = new T.Vector3(0, 1, 0).applyQuaternion(camQuat);
+  const dir = viewFwd().addScaledVector(right, clamp(dx / (Math.abs(dy) + 1), -0.6, 0.6) * 0.18).normalize();
+  const v = dir.multiplyScalar(speed).addScaledVector(up, 0.35 + 1.2 / speed);
+  const col = FLIGHT_COLS[DARTS.n++ % 3], m = dartModel(1, col);
+  const p = dartStart(); m.position.copy(p); scene.add(m);
+  DARTS.flying.push({ m, p, v, col, age: 0 });
+  DARTS.hideUntil = performance.now() + 380;
+  noise(0.12, 0.12, 1800, 2, 'bandpass', 0, 600); buzz(10);
+}
+function updateDarts(dt, now) {
+  // the dart in your hand (bottom right of the view)
+  if (!DARTS.view || DARTS.viewCol !== FLIGHT_COLS[DARTS.n % 3]) {
+    if (DARTS.view) scene.remove(DARTS.view);
+    DARTS.viewCol = FLIGHT_COLS[DARTS.n % 3]; DARTS.view = dartModel(1, DARTS.viewCol); scene.add(DARTS.view);
+  }
+  const show = xrActive && haveCam && selected === 'darts' && now > DARTS.hideUntil;
+  DARTS.view.visible = show;
+  if (show) { DARTS.view.position.copy(dartStart()); DARTS.view.quaternion.copy(camQuat).multiply(qX(0.18)); }
+  for (let i = DARTS.flying.length - 1; i >= 0; i--) {
+    const d = DARTS.flying[i];
+    d.age += dt; d.v.y -= 9.8 * dt;
+    const np = d.p.clone().addScaledVector(d.v, dt), seg = np.clone().sub(d.p);
+    let done = false;
+    for (const it of items) {
+      if (it.spec !== SPECS.dartboard) continue;
+      const q = bodyQuat(it.body), n = new T.Vector3(0, 0, 1).applyQuaternion(q);
+      const c = bodyPos(it.body).addScaledVector(n, 0.02 * it.scale), den = n.dot(seg);
+      if (den >= 0) continue;
+      const t = n.dot(c.clone().sub(d.p)) / den; if (t < 0 || t > 1) continue;
+      const hit = d.p.clone().addScaledVector(seg, t), off = hit.clone().sub(c);
+      if (off.length() > BOARD_R * it.scale) continue;
+      const lo = off.applyQuaternion(q.clone().invert()).divideScalar(it.scale), sc = scoreAt(lo.x, lo.y);
+      const dir = d.v.clone().normalize();
+      d.m.position.copy(hit).addScaledVector(dir, 0.012);
+      d.m.quaternion.setFromUnitVectors(new T.Vector3(0, 0, -1), dir);
+      DARTS.stuck.push({ m: d.m, board: it });
+      DARTS.turn.push(sc); DARTS.total += sc.v;
+      tone(180, 90, 0.07, 0.35); noise(0.05, 0.25, 900, 2, 'bandpass'); buzz(25);
+      if (sc.v >= 50 || sc.t.startsWith('Triple')) { showHint(`${sc.t} ${sc.v} 🔥`, 1600); tone(660, 990, 0.18, 0.12, 'triangle', 0.05); }
+      else showHint(sc.v ? `${sc.t}: ${sc.v}` : 'Off the scoring area', 1100);
+      if (DARTS.turn.length >= 3) setTimeout(() => showHint(`Turn: ${DARTS.turn.reduce((a, b) => a + b.v, 0)} · throw again for a new turn`, 2200), 900);
+      done = true; break;
+    }
+    if (!done) {
+      let knocked = null;
+      for (const it of items) { if (it.spec.fixed) continue; const b = it.body.position; if (Math.hypot(np.x - b.x, np.y - b.y, np.z - b.z) < it.r) { knocked = it; break; } }
+      const sy = surfaceY(np.x, np.z, np.y + 0.05);
+      const iv = voxReady() ? voxIndexOf(np.x, np.y, np.z) : null;
+      if (knocked || np.y <= sy || (iv && voxSolidIdx(iv[0], iv[1], iv[2])) || d.age > 4) {
+        if (knocked) { const kb = knocked.body, k = 0.022 / Math.max(0.02, kb.mass); kb.velocity.x += d.v.x * k; kb.velocity.y += d.v.y * k; kb.velocity.z += d.v.z * k; kb.wakeUp(); }
+        scene.remove(d.m);
+        const it = spawnSpec(SPECS.dart, 1, d.p, d.m.quaternion);
+        it.body.velocity.set(d.v.x * 0.2, d.v.y * 0.2, d.v.z * 0.2);
+        SOUNDS.plastic(0.6);
+        DARTS.turn.push({ t: 'Miss', v: 0 }); showHint('Missed the board', 900);
+        done = true;
+      }
+    }
+    if (done) { DARTS.flying.splice(i, 1); updateScoreChip(); continue; }
+    d.p.copy(np); d.m.position.copy(np);
+    d.m.quaternion.setFromUnitVectors(new T.Vector3(0, 0, -1), d.v.clone().normalize());
+  }
+  // darts stuck in a board that was removed fall away
+  for (let i = DARTS.stuck.length - 1; i >= 0; i--) if (!items.includes(DARTS.stuck[i].board)) { scene.remove(DARTS.stuck[i].m); DARTS.stuck.splice(i, 1); }
+}
+function placeBoard(p, how, dir, sc) {
+  const f = new T.Vector3(camPos.x - p.x, 0, camPos.z - p.z); if (f.lengthSq() < 1e-6) f.set(0, 0, 1); f.normalize();
+  const R = BOARD_R * sc, c = p.clone();
+  if (how === 'air') c.copy(camPos).addScaledVector(dir, 1.5);
+  else if (dir.y < -0.55) c.y = p.y + R + 0.005;          // tapped a floor/table: stand it up there
+  else c.addScaledVector(f, 0.022 * sc);                  // tapped a wall: hang it there
+  const it = spawnSpec(SPECS.dartboard, sc, c, qY(Math.atan2(f.x, f.z)));
+  showHint('Dartboard up! Pick 📌 Darts and swipe up to throw', 2400);
+  updateScoreChip();
+  return it;
+}
+
+const MENU = ['pizza', 'burger', 'donut', 'apple', 'orange', 'banana', 'watermelon', 'cake', 'pancakes', 'jelly', 'soda', 'glass', 'plate', 'bowl', 'ball', 'bowling', 'pins', 'jenga', 'dominoes', 'dartboard', 'darts'];
 
 // Piece helpers ---------------------------------------------------------
 function centered(raw, shapeFn) {
@@ -1275,6 +1439,8 @@ function placeAt(pt, info, now) {
   const sc = SIZES[sizeIdx].s, spec = SPECS[selected];
   const fwd = new T.Vector3(p.x - camPos.x, 0, p.z - camPos.z); if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); fwd.normalize();
   sfx.place(); buzz(12);
+  if (spec.kind === 'darts') { showHint('Swipe up to throw a dart', 1400); return; }
+  if (spec.kind === 'board') { placeBoard(p, how, dir, sc); return; }
   if (spec.kind === 'set') {
     const g = new T.Vector3(p.x, how === 'air' ? Math.max(surfaceY(p.x, p.z, p.y + 0.01), floorY ?? p.y - 1) : p.y, p.z);
     if (floorY !== null && g.y > floorY + 0.12 && voxSurfaceY(g.x, g.z, g.y + 0.05) === null) ensureSlab(g.x, g.y, g.z);
@@ -1309,15 +1475,43 @@ function startGrab(it, mode, handPoint) {
   if (mode === 'phone') showHint(it.spec.edible || it.spec === SPECS.soda ? 'Move your phone to carry it. Tap with another finger to take a bite. Let go to drop, flick to throw' : 'Move your phone to carry it. Let go to drop, flick to throw', 2600);
   else showHint('Got it! Open your hand to drop, fling to throw', 2000);
 }
+function dragPoint(x, y) {
+  const dir = screenRay(x, y);
+  let p = voxRay(camPos, dir, 5);
+  if (p) return p;
+  let best = null, bt = Infinity;
+  const planes = []; if (floorY !== null) planes.push({ y: floorY }); for (const sl of slabs) planes.push(sl);
+  if (reticle.visible) planes.push({ y: reticle.matrix.elements[13] });
+  for (const pl of planes) {
+    if (dir.y > -0.01) continue;
+    const t = (pl.y - camPos.y) / dir.y; if (t < 0.1 || t > 6 || t > bt) continue;
+    const q = camPos.clone().addScaledVector(dir, t);
+    if (pl.half && (Math.abs(q.x - pl.x) > pl.half || Math.abs(q.z - pl.z) > pl.half)) continue;
+    best = q; bt = t;
+  }
+  return best || camPos.clone().addScaledVector(dir, 0.8);
+}
+function startDrag(it, x, y) {
+  if (held) releaseGrab();
+  const b = it.body;
+  b.type = C.Body.KINEMATIC; b.updateSolveMassProperties && b.updateSolveMassProperties();
+  b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0); b.wakeUp();
+  b.updateAABB();
+  const half = (b.aabb.upperBound.y - b.aabb.lowerBound.y) / 2;
+  held = { item: it, mode: 'drag', sx: x, sy: y, half, q: bodyQuat(b), hist: [], pos: bodyPos(b) };
+  sfx.grab(); buzz(15);
+  showHint('Drag it anywhere. Lift your finger to drop', 1600);
+}
 function releaseGrab(extraV) {
   if (!held) return;
-  const { item, hist } = held; held = null;
+  const { item, hist } = held; const mode0 = held.mode; held = null;
   if (!items.includes(item)) return;
   const b = item.body;
   b.type = C.Body.DYNAMIC; b.updateMassProperties(); b.updateSolveMassProperties && b.updateSolveMassProperties();
   const v = new T.Vector3();
   if (hist.length > 1) { const a = hist[0], z = hist[hist.length - 1], dt = (z.t - a.t) / 1000; if (dt > 0.02) v.copy(z.p).sub(a.p).divideScalar(dt).multiplyScalar(1.1); }
-  if (v.length() > 9) v.setLength(9);
+  const maxV = mode0 === 'drag' ? 2.5 : 9; if (mode0 === 'drag') v.multiplyScalar(0.45);
+  if (v.length() > maxV) v.setLength(maxV);
   if (v.length() < 0.15) v.set(0, 0, 0);
   b.velocity.set(v.x, v.y, v.z);
   const sp = v.length();
@@ -1328,6 +1522,16 @@ function updateHeld(dt, now) {
   if (!held) return;
   if (!items.includes(held.item)) { held = null; return; }
   const it = held.item, b = it.body;
+  if (held.mode === 'drag') {
+    const t = dragPoint(held.sx, held.sy); t.y += held.half + 0.03;
+    held.pos.lerp(t, 1 - Math.pow(0.00005, dt));
+    b.velocity.set((held.pos.x - b.position.x) / dt, (held.pos.y - b.position.y) / dt, (held.pos.z - b.position.z) / dt);
+    b.angularVelocity.set(0, 0, 0);
+    held.target = held.pos.clone();
+    held.hist.push({ t: now, p: held.target.clone() });
+    while (held.hist.length && now - held.hist[0].t > 120) held.hist.shift();
+    return;
+  }
   let target;
   if (held.mode === 'hand') {
     if (!hand.p3) return;
@@ -1393,8 +1597,9 @@ function pickScreen(x, y) { if (!haveCam) return null; const r = pickRay(screenR
 // The room is mapped as 3 cm cubes in full 3D, in chunks that load around you as you move.
 // Each cube collects "seen solid" and "seen through" votes from the depth sensor, so noise and
 // people walking past clear out. Solid cubes merge into larger boxes for the physics engine.
-const VS = 0.03, CS = 16, CW = VS * CS, CN = CS * CS * CS;
+let VS = 0.03, CW = 0.03 * 16; const CS = 16, CN = CS * CS * CS;
 const HIT = 0.6, MISS = -0.3, THR = 0.9, OMAX = 3.5, OMIN = -2;
+const SCAN = { normal: { gx: 18, gy: 30, every: 140, hit: 0.6, miss: -0.3 }, high: { gx: 26, gy: 44, every: 90, hit: 1.0, miss: -0.2 }, max: { gx: 34, gy: 58, every: 65, hit: 1.0, miss: -0.15 } };
 const VOX = { chunks: new Map(), y0: null, enabled: true, lastScan: 0, lastBuild: 0, maskData: null };
 const ckey = (cx, cy, cz) => ((cx + 512) * 1024 + (cy + 512)) * 1024 + (cz + 512);
 const vIdx = (lx, ly, lz) => lx + CS * (lz + CS * ly);
@@ -1455,28 +1660,40 @@ function inHandMask(nx, ny) {
   return m.data[(y * m.width + x) * 4] > 20;
 }
 function scanRoom(info, now) {
-  if (!VOX.enabled || floorY === null || now - VOX.lastScan < 140) return;
+  const cfg = SCAN[opts.scanLevel] || SCAN.high;
+  if (!VOX.enabled || floorY === null || now - VOX.lastScan < cfg.every) return;
   VOX.lastScan = now;
   if (VOX.y0 === null) VOX.y0 = floorY + 0.025;
   VOX.maskData = (hand.enabled && hand.lm && maskCv.width) ? maskCtx.getImageData(0, 0, maskCv.width, maskCv.height) : null;
   const fwd = new T.Vector3(0, 0, -1).applyQuaternion(camQuat), q = new T.Vector3();
-  const GX = 18, GY = 30;
+  const GX = cfg.gx, GY = cfg.gy, missStep = VS * (opts.scanLevel === 'normal' ? 1 : 1.25);
+  let tried = 0, valid = 0;
   _ck = NaN; _cc = null;
   for (let gy = 0; gy < GY; gy++) for (let gx = 0; gx < GX; gx++) {
     const nx = (gx + 0.2 + Math.random() * 0.6) / GX, ny = (gy + 0.2 + Math.random() * 0.6) / GY;
     if (inHandMask(nx, ny)) continue; // never map your own hand
     let d; try { d = info.getDepthInMeters(nx, ny); } catch (e) { return; }
-    if (!(d > 0.15 && d < 3.0)) continue;
+    tried++;
+    if (!(d > 0.15 && d < 3.5)) {
+      // dark/blank spot: borrow from close neighbours if they agree (fills small gaps only)
+      const nb = [];
+      for (const [ox, oy] of [[-0.025, 0], [0.025, 0], [0, -0.018], [0, 0.018]]) { const v = depthAt(info, nx + ox, ny + oy); if (v > 0.15 && v < 3.5) nb.push(v); }
+      if (nb.length < 3) continue;
+      const lo = Math.min(...nb), hi = Math.max(...nb); if (hi - lo > 0.08) continue;
+      d = nb.reduce((a, b) => a + b, 0) / nb.length;
+    } else valid++;
     const dir = ndcRay(nx * 2 - 1, 1 - ny * 2), cosA = dir.dot(fwd);
     if (cosA < 0.2) continue;
     const dist = d / cosA, w = d > 2 ? 0.6 : 1;
     // seen through: free space along the ray
-    for (let st = 0.12; st < dist - VS * 1.5; st += VS) { q.copy(camPos).addScaledVector(dir, st); voxVote(q.x, q.y, q.z, MISS); }
+    for (let st = 0.12; st < dist - VS * 1.5; st += missStep) { q.copy(camPos).addScaledVector(dir, st); voxVote(q.x, q.y, q.z, cfg.miss); }
     // seen solid: the surface point (floor itself is handled by the floor plane)
     q.copy(camPos).addScaledVector(dir, dist);
     if (q.y < floorY + 0.025 || q.y > floorY + 2.5) continue;
-    voxVote(q.x, q.y, q.z, HIT * w);
+    voxVote(q.x, q.y, q.z, cfg.hit * w);
   }
+  VOX.dark = lerp(VOX.dark || 0, tried ? 1 - valid / tried : 0, 0.15);
+  if (VOX.dark > 0.55 && now - (VOX.darkHint || 0) > 15000) { VOX.darkHint = now; showHint('Too dark here. More light helps the scan', 2600); }
   // drop far-away chunks so the scan follows you
   if (VOX.chunks.size > 520) {
     const arr = [...VOX.chunks.values()].map(c => ({ c, d: Math.hypot((c.cx + 0.5) * CW - camPos.x, (c.cz + 0.5) * CW - camPos.z) })).sort((a, b) => b.d - a.d);
@@ -1501,7 +1718,7 @@ function dropChunk(c) {
   VOX.chunks.delete(c.k); _ck = NaN; _cc = null;
 }
 const voxVisMat = new T.MeshBasicMaterial({ color: 0x22e0ff, transparent: true, opacity: 0.35, depthWrite: false });
-const voxVisGeo = new T.BoxGeometry(VS * 0.92, VS * 0.92, VS * 0.92);
+let voxVisGeo = new T.BoxGeometry(VS * 0.92, VS * 0.92, VS * 0.92);
 function rebuildChunk(c, now) {
   c.dirty = false; c.built = now;
   if (c.body) { world.removeBody(c.body); c.body = null; }
@@ -1587,6 +1804,11 @@ function setVoxEnabled(on) {
     if (c.vis) c.vis.visible = on && opts.showScan;
   }
   for (const it of items) it.body.wakeUp();
+}
+function setVoxelSize(v) {
+  for (const c of [...VOX.chunks.values()]) dropChunk(c);
+  VS = v; CW = VS * CS; voxVisGeo = new T.BoxGeometry(VS * 0.92, VS * 0.92, VS * 0.92);
+  showHint(v < 0.03 ? 'Fine detail on: rescanning…' : 'Normal detail: rescanning…', 1600);
 }
 function refreshVoxVis() { for (const c of VOX.chunks.values()) { c.dirty = true; c.built = 0; } }
 
@@ -1806,7 +2028,7 @@ function findHandTarget(grip) {
   const sx = sp.x * innerWidth, sy = sp.y * innerHeight, focal = projMat.elements[5] * innerHeight / 2, margin = grip === 'fist' ? 50 : 34;
   let sBest = null, sScore = Infinity;
   for (const it of items) {
-    if (held && held.item === it) continue;
+    if ((held && held.item === it) || it.spec.fixed) continue;
     const sc = toScreen(it.body.position); if (!sc) continue;
     const rp = it.r * focal / sc.depth, d2 = Math.hypot(sc.x - sx, sc.y - sy);
     if (d2 < rp + margin) { const score = d2 / (rp + margin) + Math.abs(sc.depth - hand.depth) * 0.6; if (score < sScore) { sScore = score; sBest = it; } }
@@ -1815,7 +2037,7 @@ function findHandTarget(grip) {
   const pt = grip === 'fist' ? hand.palmC : hand.pinchP, reach = grip === 'fist' ? 0.085 : 0.055;
   let best = null, bd = Infinity;
   for (const it of items) {
-    if (held && held.item === it) continue;
+    if ((held && held.item === it) || it.spec.fixed) continue;
     const p = it.body.position, dist = Math.hypot(p.x - pt.x, p.y - pt.y, p.z - pt.z) - it.r;
     if (dist < reach && dist < bd) { bd = dist; best = it; }
   }
@@ -1986,16 +2208,46 @@ function drawFx(now) {
 
 /* ============================== UI ============================== */
 const bar = $('bar');
+let barDrag = null, barSuppress = false;
+addEventListener('pointermove', e => {
+  if (!barDrag || e.pointerId !== barDrag.id) return;
+  if (!barDrag.started) {
+    const dy = e.clientY - barDrag.y, dx = e.clientX - barDrag.x;
+    if (dy < -28 && -dy > Math.abs(dx)) {
+      barDrag.started = true;
+      selected = barDrag.key; bar.querySelectorAll('.item').forEach(x => x.classList.remove('sel')); barDrag.b.classList.add('sel'); updateScoreChip();
+      const sp = SPECS[barDrag.key];
+      if (sp.build && !sp.fixed && haveCam) {
+        const p = dragPoint(e.clientX, e.clientY);
+        const it = spawnSpec(sp, SIZES[sizeIdx].s, p.clone().add(new T.Vector3(0, 0.05, 0)), qY(Math.atan2(camPos.x - p.x, camPos.z - p.z)));
+        startDrag(it, e.clientX, e.clientY); barDrag.item = it;
+      }
+    }
+  } else if (held && held.mode === 'drag' && barDrag.item) { held.sx = e.clientX; held.sy = e.clientY; }
+});
+const endBarDrag = e => {
+  if (!barDrag || e.pointerId !== barDrag.id) return;
+  if (barDrag.started) {
+    barSuppress = true; setTimeout(() => { barSuppress = false; }, 400);
+    if (barDrag.item) { if (held && held.item === barDrag.item) releaseGrab(); }
+    else if (e.type === 'pointerup') placeAtReticle(e.clientX, e.clientY);
+  }
+  barDrag = null;
+};
+addEventListener('pointerup', endBarDrag);
+addEventListener('pointercancel', endBarDrag);
 for (const key of MENU) {
   const sp = SPECS[key];
   const b = document.createElement('button');
   b.className = 'item' + (key === selected ? ' sel' : '');
   b.innerHTML = `<span>${sp.emoji}</span>${sp.label}`;
+  b.addEventListener('pointerdown', e => { barDrag = { key, b, x: e.clientX, y: e.clientY, id: e.pointerId, started: false, item: null }; });
   b.onclick = () => {
-    selected = key;
+    if (barSuppress) { barSuppress = false; return; }
+    selected = key; updateScoreChip();
     bar.querySelectorAll('.item').forEach(x => x.classList.remove('sel')); b.classList.add('sel');
     if (trashMode) setTrash(false);
-    showHint(`${sp.emoji} ${sp.label} selected. Tap a surface to place`, 1400);
+    showHint(sp.kind === 'darts' ? '📌 Swipe up to throw darts' : `${sp.emoji} ${sp.label}: tap anywhere, or drag it from here into the room`, 1600);
   };
   bar.appendChild(b);
 }
@@ -2004,6 +2256,7 @@ function setTrash(on) { trashMode = on; $('trashBtn').classList.toggle('red', on
 $('trashBtn').onclick = () => setTrash(!trashMode);
 $('clearBtn').onclick = () => {
   [...items].forEach(it => removeItem(it, true));
+  clearTurn(); for (const d of DARTS.flying) scene.remove(d.m); DARTS.flying.length = 0; updateScoreChip();
   sfx.poof(); showHint('All cleared', 1200);
 };
 $('sizeBtn').onclick = () => { sizeIdx = (sizeIdx + 1) % SIZES.length; $('sizeBtn').textContent = SIZES[sizeIdx].n; };
@@ -2014,10 +2267,16 @@ document.querySelectorAll('.tog').forEach(t => {
   t.onclick = () => {
     opts[k] = !opts[k]; t.classList.toggle('on', opts[k]);
     if (k === 'showScan') refreshVoxVis();
+    if (k === 'fine') setVoxelSize(opts.fine ? 0.02 : 0.03);
     if (k === 'obstacles') setVoxEnabled(opts.obstacles);
     if (k === 'sound' && !opts.sound) setPourSound(false);
   };
 });
+$('scanLvlBtn').onclick = () => {
+  const order = ['normal', 'high', 'max'], n = order[(order.indexOf(opts.scanLevel) + 1) % 3];
+  opts.scanLevel = n; $('scanLvlBtn').textContent = n[0].toUpperCase() + n.slice(1);
+};
+$('score').onclick = () => { clearTurn(); DARTS.total = 0; updateScoreChip(); showHint('Score reset', 1000); };
 $('exitBtn').onclick = () => { const s = renderer.xr.getSession(); if (s) s.end(); };
 document.querySelectorAll('#top, #bar, .panel').forEach(el => el.addEventListener('beforexrselect', e => e.preventDefault()));
 function updateFeatStat() {
@@ -2041,17 +2300,18 @@ touch.addEventListener('pointerdown', e => {
   $('settings').style.display = 'none';
   const it = pickScreen(e.clientX, e.clientY);
   pDown = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), item: it, moved: false, timer: null, path: [{ x: e.clientX, y: e.clientY, t: performance.now() }] };
-  if (it && !trashMode) {
-    pDown.timer = setTimeout(() => { if (pDown && !pDown.moved && items.includes(pDown.item)) { startGrab(pDown.item, 'phone'); held.startY = pDown.y; held.curY = pDown.y; } }, 240);
-  }
+
 });
 touch.addEventListener('pointermove', e => {
   if (!pDown || e.pointerId !== pDown.id) return;
   const now = performance.now();
-  if (held && held.mode === 'phone') return;
+  if (held && held.mode === 'drag') { held.sx = e.clientX; held.sy = e.clientY; return; }
   pDown.path.push({ x: e.clientX, y: e.clientY, t: now });
-  if (Math.hypot(e.clientX - pDown.x, e.clientY - pDown.y) > 16) { pDown.moved = true; clearTimeout(pDown.timer); }
-  if (pDown.moved) trail.push({ x: e.clientX, y: e.clientY, t: now });
+  if (Math.hypot(e.clientX - pDown.x, e.clientY - pDown.y) > 12) {
+    pDown.moved = true;
+    if (pDown.item && !trashMode && !pDown.item.spec.fixed && items.includes(pDown.item) && selected !== 'darts') { startDrag(pDown.item, e.clientX, e.clientY); return; }
+  }
+  if (pDown.moved && selected !== 'darts') trail.push({ x: e.clientX, y: e.clientY, t: now });
 });
 function distToSeg(px, py, a, b) {
   const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
@@ -2065,6 +2325,7 @@ function doSwipe(path) {
   const focal = projMat.elements[5] * innerHeight / 2;
   const hits = [];
   for (const it of items) {
+    if (it.spec.fixed) continue;
     const s = toScreen(it.body.position); if (!s) continue;
     const rp = it.r * focal / s.depth;
     let md = Infinity; for (let i = 1; i < path.length; i++) md = Math.min(md, distToSeg(s.x, s.y, path[i - 1], path[i]));
@@ -2079,14 +2340,18 @@ function endPointer(e) {
   if (!pDown || e.pointerId !== pDown.id) return;
   clearTimeout(pDown.timer);
   const now = performance.now();
-  if (held && held.mode === 'phone') releaseGrab();
+  if (held && held.mode === 'drag') releaseGrab();
   else if (e.type === 'pointerup') {
     if (pDown.moved) {
       const p = pDown.path; let L = 0; for (let i = 1; i < p.length; i++) L += Math.hypot(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y);
-      if (L > 60 && now - pDown.t < 800 && !trashMode) doSwipe(p);
+      const dy = e.clientY - pDown.y, dx = e.clientX - pDown.x;
+      if (selected === 'darts' && dy < -50 && -dy > Math.abs(dx) * 0.8) {
+        const tail = p.filter(q => now - q.t < 120), a0 = tail.length > 1 ? tail[0] : p[0];
+        throwDart(e.clientX - a0.x, e.clientY - a0.y, now - a0.t);
+      } else if (L > 60 && now - pDown.t < 800 && !trashMode) doSwipe(p);
     } else if (pDown.item && items.includes(pDown.item)) {
-      if (trashMode) { removeItem(pDown.item, true); sfx.poof(); buzz(20); } else tap(pDown.item);
-    } else if (!trashMode) placeAtReticle(e.clientX, e.clientY);
+      if (trashMode) { removeItem(pDown.item, true); sfx.poof(); buzz(20); updateScoreChip(); } else if (!pDown.item.spec.fixed) tap(pDown.item);
+    } else if (!trashMode) { if (selected === 'darts') showHint('Swipe up to throw a dart', 1200); else placeAtReticle(e.clientX, e.clientY); }
   }
   pDown = null;
 }
@@ -2182,6 +2447,11 @@ renderer.setAnimationLoop((t, frame) => {
             reticle.matrix.copy(tmpM); shown = true;
             const y = tmpM.elements[13];
             if (floorY === null || y < floorY - 0.03) setFloor(y);
+            if (depthInfo && VOX.y0 !== null && now - (VOX.lastPatch || 0) > 200 && depthAt(depthInfo, 0.5, 0.5) === 0 && y > floorY + 0.05) {
+              VOX.lastPatch = now; _ck = NaN; _cc = null;
+              const px = tmpM.elements[12], pz = tmpM.elements[14];
+              for (let a = -3; a <= 3; a++) for (let b = -3; b <= 3; b++) voxVote(px + a * VS, y - 0.002, pz + b * VS, 2);
+            }
           }
         }
       }
@@ -2193,10 +2463,10 @@ renderer.setAnimationLoop((t, frame) => {
       }
       reticle.visible = shown && !held;
       if (now > hintLock) {
-        $('hint').textContent = held ? (held.mode === 'hand' ? 'Turn your wrist to rotate. Open your hand to drop' : 'Let go to drop, flick to throw')
+        $('hint').textContent = held ? (held.mode === 'hand' ? 'Turn your wrist to rotate. Open your hand to drop' : 'Lift your finger to drop it')
           : trashMode ? 'Trash mode: tap items to remove them'
           : (hand.enabled && hand.lm) ? (hand.hover ? (hand.hover.r > 0.13 ? `Make a fist to grab the ${hand.hover.spec.label.toLowerCase()}` : `Pinch to grab the ${hand.hover.spec.label.toLowerCase()}`) : handTray.active ? 'Palm up: things can sit in your hand' : 'Reach toward something. Pinch or make a fist')
-          : `Tap anywhere to place ${SPECS[selected].emoji} · swipe to slice · hold to grab`;
+          : selected === 'darts' ? '📌 Swipe up to throw' : `Tap to place ${SPECS[selected].emoji} · drag things to move them · swipe to slice`;
       }
     }
     ring.rotation.y += dt * 1.5;
@@ -2214,6 +2484,7 @@ renderer.setAnimationLoop((t, frame) => {
   applyCatches();
   snapHeld();
   updateVoxels(now);
+  updateDarts(dt, now);
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i], b = it.body;
     it.mesh.position.set(b.position.x, b.position.y, b.position.z);

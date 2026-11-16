@@ -96,8 +96,8 @@
     <div id="hint">Point at the floor or a table and move your phone slowly</div>
     <div class="panel" id="settings">
       <div class="row"><span>Hide behind real objects</span><button class="tog on" data-k="occlusion"></button></div>
-      <div class="row"><span>Bump into real objects</span><button class="tog on" data-k="obstacles"></button></div>
-      <div class="row"><span>Show scanned obstacles</span><button class="tog" data-k="showObstacles"></button></div>
+      <div class="row"><span>Real-shape physics (room scan)</span><button class="tog on" data-k="obstacles"></button></div>
+      <div class="row"><span>Show room scan</span><button class="tog" data-k="showScan"></button></div>
       <div class="row"><span>Hand pushes objects</span><button class="tog on" data-k="handPush"></button></div>
       <div class="row"><span>Flip hand camera (if hand dots are upside-down)</span><button class="tog" data-k="flipCam"></button></div>
       <div class="row"><span>Sounds</span><button class="tog on" data-k="sound"></button></div>
@@ -129,7 +129,7 @@ const Y = new T.Vector3(0, 1, 0);
 const qY = a => new T.Quaternion().setFromAxisAngle(Y, a);
 const qZ = a => new T.Quaternion().setFromAxisAngle(new T.Vector3(0, 0, 1), a);
 
-const opts = { occlusion: true, obstacles: true, showObstacles: false, handPush: true, flipCam: false, sound: true };
+const opts = { occlusion: true, obstacles: true, showScan: false, handPush: true, flipCam: false, sound: true };
 const features = { light: false, depth: false, camera: false, overlay: false };
 
 /* ============================== Renderer & scene ============================== */
@@ -961,10 +961,12 @@ function setFloor(y) {
   }
   floorBody.position.set(0, y, 0);
   floorShadow.position.set(0, y + 0.001, 0);
+  if (HF.geo) { const pos = HF.geo.attributes.position.array; for (let v = 0; v < HF.known.length; v++) if (!HF.known[v]) pos[v * 3 + 1] = y; HF.geo.attributes.position.needsUpdate = true; }
   if (old !== null && old - y > 0.15) for (const it of items) { const p = it.body.position; if (p.y > old - 0.05 && p.y < old + 0.4) ensureSlab(p.x, old, p.z); }
 }
 function ensureSlab(x, y, z) {
   if (floorY !== null && y < floorY + 0.12) return;
+  const hy = hfGet(x, z); if (hy !== null && Math.abs(hy - y) < 0.1) return;
   for (const s of slabs) if (Math.abs(s.y - y) < 0.05 && Math.hypot(s.x - x, s.z - z) < 0.3) return;
   const half = 0.4, thick = 0.05;
   const body = new C.Body({ mass: 0, material: groundMat, shape: new C.Box(new C.Vec3(half, thick, half)) });
@@ -975,6 +977,7 @@ function ensureSlab(x, y, z) {
 }
 function surfaceY(x, z, below = Infinity) {
   let y = floorY === null ? -Infinity : floorY;
+  const hy = hfGet(x, z); if (hy !== null && hy < below && hy > y) y = hy;
   for (const s of slabs) if (s.y < below && s.y > y && Math.abs(x - s.x) < s.half && Math.abs(z - s.z) < s.half) y = s.y;
   return y;
 }
@@ -1316,10 +1319,15 @@ function flick(it, dir) {
   b.angularVelocity.set((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8);
   buzz(10);
 }
-function placeAtReticle() {
-  if (!reticle.visible) { showHint('No surface yet. Move your phone slowly over the floor or a table', 1800); return; }
-  const p = new T.Vector3().setFromMatrixPosition(reticle.matrix);
-  ensureSlab(p.x, p.y, p.z);
+function placeAtReticle(sx, sy) {
+  let p = null, onScan = false;
+  if (sx !== undefined && haveCam) { p = hfRay(camPos, screenRay(sx, sy)); onScan = !!p; }
+  if (!p) {
+    if (!reticle.visible) { showHint('No surface yet. Move your phone slowly over the floor or a table', 1800); return; }
+    p = new T.Vector3().setFromMatrixPosition(reticle.matrix);
+    onScan = hfGet(p.x, p.z) !== null;
+  }
+  if (!onScan) { ensureSlab(p.x, p.y, p.z); if (HF.inWorld) showHint('Scanning… move your phone around here so it lands on the real shape', 2200); }
   const sc = SIZES[sizeIdx].s, spec = SPECS[selected];
   const fwd = new T.Vector3(p.x - camPos.x, 0, p.z - camPos.z); if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); fwd.normalize();
   sfx.place(); buzz(12);
@@ -1429,49 +1437,166 @@ function pickRay(dir, maxDist = 6) {
 }
 function pickScreen(x, y) { if (!haveCam) return null; const r = pickRay(screenRay(x, y)); return r ? r.it : null; }
 
-/* ============================== Depth: real obstacles ============================== */
-const cells = new Map();
-const cellGeo = new T.SphereGeometry(0.012, 6, 4);
-const cellMat = new T.MeshBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: 0.6 });
-const CELL = 0.06;
-let lastObstacleScan = 0;
-function scanObstacles(info, now) {
-  if (!opts.obstacles || floorY === null || now - lastObstacleScan < 220) return;
-  lastObstacleScan = now;
-  const fwd = new T.Vector3(0, 0, -1).applyQuaternion(camQuat);
-  const viewInv = camQuat.clone().invert();
-  // carve cells we can now see through
-  for (const [k, c] of cells) {
-    const rel = c.p.clone().sub(camPos), dz = rel.dot(fwd);
-    if (dz < 0.25 || dz > 3.5) continue;
-    const s = toScreen(c.p); if (!s) continue;
-    const nx = s.x / innerWidth, ny = s.y / innerHeight;
-    if (nx < 0.02 || nx > 0.98 || ny < 0.02 || ny > 0.98) continue;
-    let d; try { d = info.getDepthInMeters(nx, ny); } catch (e) { continue; }
-    if (d > 0 && d > dz + 0.12) removeCell(k);
+/* ============================== Depth: live room scan (real shapes) ============================== */
+// A height grid of your room, filled in from the depth sensor. Objects collide with it, so they
+// settle into couch cushions, roll down slopes, sit on top of real things and stop at walls.
+const UNKNOWN = -20;
+const HF = { N: 160, es: 0.04, x0: 0, z0: 0, data: null, known: null, shape: null, body: null, geo: null, vis: null, shadow: null,
+  lastScan: 0, lastVis: 0, lastNormals: 0, lastSlabCheck: 0, visDirty: false, inWorld: false };
+function hfIndex(x, z) {
+  const i = Math.round((x - HF.x0) / HF.es), j = Math.round((HF.z0 - z) / HF.es);
+  return (i < 0 || j < 0 || i > HF.N || j > HF.N) ? null : [i, j];
+}
+function hfGet(x, z) {
+  if (!HF.inWorld) return null;
+  const c = hfIndex(x, z); if (!c) return null;
+  return HF.known[c[0] * (HF.N + 1) + c[1]] ? HF.data[c[0]][c[1]] : null;
+}
+function initHF() {
+  if (HF.data || floorY === null) return;
+  const N = HF.N, es = HF.es;
+  HF.x0 = camPos.x - N * es / 2; HF.z0 = camPos.z + N * es / 2;
+  HF.data = []; for (let i = 0; i <= N; i++) { const row = new Array(N + 1).fill(UNKNOWN); HF.data.push(row); }
+  HF.known = new Uint8Array((N + 1) * (N + 1));
+  HF.shape = new C.Heightfield(HF.data, { elementSize: es });
+  HF.body = new C.Body({ mass: 0, material: groundMat });
+  HF.body.addShape(HF.shape);
+  HF.body.position.set(HF.x0, 0, HF.z0);
+  HF.body.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+  // Visual mesh (wireframe when "Show room scan" is on) + a shadow catcher on the real shapes
+  const V = (N + 1) * (N + 1), pos = new Float32Array(V * 3), col = new Float32Array(V * 4), idx = new Uint32Array(N * N * 6);
+  for (let i = 0; i <= N; i++) for (let j = 0; j <= N; j++) {
+    const v = i * (N + 1) + j;
+    pos[v * 3] = HF.x0 + i * es; pos[v * 3 + 1] = floorY; pos[v * 3 + 2] = HF.z0 - j * es;
+    col[v * 4] = 0.1; col[v * 4 + 1] = 0.9; col[v * 4 + 2] = 1; col[v * 4 + 3] = 0;
   }
-  // add newly seen obstacle points
-  const GX = 12, GY = 18;
+  let k = 0;
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const a = i * (N + 1) + j, b = a + N + 1;
+    idx[k++] = a; idx[k++] = a + 1; idx[k++] = b; idx[k++] = b; idx[k++] = a + 1; idx[k++] = b + 1;
+  }
+  HF.geo = new T.BufferGeometry();
+  HF.geo.setAttribute('position', new T.BufferAttribute(pos, 3).setUsage(T.DynamicDrawUsage));
+  HF.geo.setAttribute('color', new T.BufferAttribute(col, 4).setUsage(T.DynamicDrawUsage));
+  HF.geo.setIndex(new T.BufferAttribute(idx, 1));
+  HF.geo.computeVertexNormals();
+  HF.vis = new T.Mesh(HF.geo, new T.MeshBasicMaterial({ vertexColors: true, transparent: true, wireframe: true, depthWrite: false }));
+  HF.vis.frustumCulled = false; HF.vis.visible = opts.showScan; HF.vis.renderOrder = 3;
+  HF.shadow = new T.Mesh(HF.geo, shadowMat);
+  HF.shadow.receiveShadow = true; HF.shadow.frustumCulled = false; HF.shadow.position.y = 0.002;
+  scene.add(HF.vis, HF.shadow);
+  if (opts.obstacles) hfAddToWorld();
+}
+function hfAddToWorld() {
+  if (!HF.body || HF.inWorld) return;
+  world.addBody(HF.body); HF.inWorld = true;
+  if (floorShadow) floorShadow.visible = false;
+  HF.shadow.visible = true;
+}
+function hfRemoveFromWorld() {
+  if (!HF.body || !HF.inWorld) return;
+  world.removeBody(HF.body); HF.inWorld = false;
+  if (floorShadow) floorShadow.visible = true;
+  HF.shadow.visible = false; HF.vis.visible = false;
+  for (const it of items) it.body.wakeUp();
+}
+function hfSet(i, j, v, box) {
+  const N1 = HF.N + 1;
+  if (typeof HF.shape.setHeightValueAtIndex === 'function') HF.shape.setHeightValueAtIndex(i, j, v);
+  else { HF.data[i][j] = v; HF.shape._cachedPillars = {}; }
+  const vi = i * N1 + j;
+  HF.known[vi] = 1;
+  const pos = HF.geo.attributes.position.array, col = HF.geo.attributes.color.array;
+  pos[vi * 3 + 1] = v; col[vi * 4 + 3] = 0.55;
+  HF.visDirty = true;
+  const x = HF.x0 + i * HF.es, z = HF.z0 - j * HF.es;
+  box.minX = Math.min(box.minX, x); box.maxX = Math.max(box.maxX, x); box.minZ = Math.min(box.minZ, z); box.maxZ = Math.max(box.maxZ, z); box.n++;
+}
+function scanRoom(info, now) {
+  if (!opts.obstacles || floorY === null) return;
+  initHF(); if (!HF.inWorld) hfAddToWorld();
+  if (now - HF.lastScan < 120) return;
+  HF.lastScan = now;
+  const es = HF.es, N1 = HF.N + 1;
+  const fwd = new T.Vector3(0, 0, -1).applyQuaternion(camQuat);
+  const box = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity, n: 0 };
+  const GX = 16, GY = 26, q = new T.Vector3();
   for (let gy = 0; gy < GY; gy++) for (let gx = 0; gx < GX; gx++) {
-    const nx = (gx + 0.5) / GX, ny = (gy + 0.5) / GY;
+    const nx = (gx + 0.3 + Math.random() * 0.4) / GX, ny = (gy + 0.3 + Math.random() * 0.4) / GY;
     let d; try { d = info.getDepthInMeters(nx, ny); } catch (e) { return; }
-    if (!(d > 0.25 && d < 3.2)) continue;
+    if (!(d > 0.15 && d < 3.5)) continue;
     const dir = ndcRay(nx * 2 - 1, 1 - ny * 2), cosA = dir.dot(fwd);
-    const p = camPos.clone().addScaledVector(dir, d / cosA);
-    const sy = surfaceY(p.x, p.z, p.y + 0.01);
-    if (p.y < sy + 0.05 || p.y > (floorY + 2.2)) continue;
-    const key = Math.round(p.x / CELL) + ',' + Math.round(p.y / CELL) + ',' + Math.round(p.z / CELL);
-    if (cells.has(key)) { cells.get(key).seen = now; continue; }
-    if (cells.size > 420) { const first = cells.keys().next().value; removeCell(first); }
-    const c = new T.Vector3(Math.round(p.x / CELL) * CELL, Math.round(p.y / CELL) * CELL, Math.round(p.z / CELL) * CELL);
-    const body = new C.Body({ mass: 0, material: groundMat, shape: new C.Sphere(CELL * 0.55) });
-    body.position.set(c.x, c.y, c.z); world.addBody(body);
-    const m = new T.Mesh(cellGeo, cellMat); m.position.copy(c); m.visible = opts.showObstacles; scene.add(m);
-    cells.set(key, { p: c, body, m, seen: now });
+    if (cosA < 0.2) continue;
+    const dist = d / cosA;
+    // Carve: the ray reached this far, so nothing solid sits above its path
+    for (let st = 0.15; st < dist - 0.07; st += es * 0.9) {
+      q.copy(camPos).addScaledVector(dir, st);
+      const c = hfIndex(q.x, q.z); if (!c) continue;
+      const vi = c[0] * N1 + c[1];
+      if (HF.known[vi]) { const h = HF.data[c[0]][c[1]]; if (h > q.y + 0.03 && q.y > floorY - 0.03) hfSet(c[0], c[1], Math.max(floorY - 0.02, q.y), box); }
+    }
+    // Add the surface point
+    q.copy(camPos).addScaledVector(dir, dist);
+    if (q.y < floorY - 0.08 || q.y > floorY + 2.3) continue;
+    const c = hfIndex(q.x, q.z); if (!c) continue;
+    const vi = c[0] * N1 + c[1];
+    if (!HF.known[vi]) hfSet(c[0], c[1], q.y, box);
+    else {
+      const h = HF.data[c[0]][c[1]];
+      if (q.y > h + 0.005) hfSet(c[0], c[1], h + (q.y - h) * 0.5, box);
+      else if (q.y > h - 0.05 && q.y < h - 0.005) hfSet(c[0], c[1], h + (q.y - h) * 0.25, box);
+    }
+  }
+  if (box.n) {
+    HF.shape.updateMaxValue && HF.shape.updateMaxValue();
+    HF.shape.updateBoundingSphereRadius && HF.shape.updateBoundingSphereRadius();
+    HF.body.updateBoundingRadius && HF.body.updateBoundingRadius();
+    HF.body.aabbNeedsUpdate = true;
+    // Wake anything resting where the scan changed so it re-settles on the real shape
+    for (const it of items) {
+      const p = it.body.position, m = it.r + 0.1;
+      if (p.x > box.minX - m && p.x < box.maxX + m && p.z > box.minZ - m && p.z < box.maxZ + m) it.body.wakeUp();
+    }
+  }
+  // Once a table/couch area is scanned, drop the temporary flat slab there
+  if (now - HF.lastSlabCheck > 800) {
+    HF.lastSlabCheck = now;
+    for (let k = slabs.length - 1; k >= 0; k--) {
+      const sl = slabs[k]; let tot = 0, kn = 0;
+      for (let x = sl.x - sl.half; x <= sl.x + sl.half; x += 0.08) for (let z = sl.z - sl.half; z <= sl.z + sl.half; z += 0.08) {
+        const c = hfIndex(x, z); if (!c) continue; tot++;
+        if (HF.known[c[0] * N1 + c[1]]) { const h = HF.data[c[0]][c[1]]; if (Math.abs(h - sl.y) < 0.25) kn++; }
+      }
+      if (tot && kn / tot > 0.45) {
+        world.removeBody(sl.body); scene.remove(sl.mesh); slabs.splice(k, 1);
+        for (const it of items) { const p = it.body.position; if (Math.abs(p.x - sl.x) < sl.half + 0.2 && Math.abs(p.z - sl.z) < sl.half + 0.2) it.body.wakeUp(); }
+      }
+    }
+  }
+  if (HF.visDirty && now - HF.lastVis > 250) {
+    HF.lastVis = now; HF.visDirty = false;
+    HF.geo.attributes.position.needsUpdate = true; HF.geo.attributes.color.needsUpdate = true;
+    if (now - HF.lastNormals > 1000) { HF.lastNormals = now; HF.geo.computeVertexNormals(); }
   }
 }
-function removeCell(k) { const c = cells.get(k); if (!c) return; world.removeBody(c.body); scene.remove(c.m); cells.delete(k); }
-function clearCells() { for (const k of [...cells.keys()]) removeCell(k); }
+// March a ray through the scanned room; returns the first point where it meets a real surface
+function hfRay(o, d, maxDist = 4) {
+  if (!HF.inWorld) return null;
+  const q = new T.Vector3(); let prev = 0.1;
+  for (let st = 0.1; st < maxDist; st += 0.02) {
+    q.copy(o).addScaledVector(d, st);
+    const h = hfGet(q.x, q.z);
+    if (h !== null && q.y <= h) {
+      let a = prev, b = st;
+      for (let k = 0; k < 6; k++) { const m = (a + b) / 2; q.copy(o).addScaledVector(d, m); const hm = hfGet(q.x, q.z); if (hm !== null && q.y <= hm) b = m; else a = m; }
+      q.copy(o).addScaledVector(d, b);
+      const hh = hfGet(q.x, q.z); if (hh !== null) q.y = hh;
+      return q.clone();
+    }
+    prev = st;
+  }
+  return null;
+}
 
 /* ============================== Hand tracking (MediaPipe) ============================== */
 const MP_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
@@ -1676,8 +1801,8 @@ document.querySelectorAll('.tog').forEach(t => {
   const k = t.dataset.k; t.classList.toggle('on', !!opts[k]);
   t.onclick = () => {
     opts[k] = !opts[k]; t.classList.toggle('on', opts[k]);
-    if (k === 'showObstacles') for (const c of cells.values()) c.m.visible = opts.showObstacles;
-    if (k === 'obstacles' && !opts.obstacles) clearCells();
+    if (k === 'showScan' && HF.vis) HF.vis.visible = opts.showScan && HF.inWorld;
+    if (k === 'obstacles') { if (opts.obstacles) hfAddToWorld(); else hfRemoveFromWorld(); if (HF.vis) HF.vis.visible = opts.showScan && HF.inWorld; }
     if (k === 'sound' && !opts.sound) setPourSound(false);
   };
 });
@@ -1685,7 +1810,7 @@ $('exitBtn').onclick = () => { const s = renderer.xr.getSession(); if (s) s.end(
 document.querySelectorAll('#top, #bar, .panel').forEach(el => el.addEventListener('beforexrselect', e => e.preventDefault()));
 function updateFeatStat() {
   const f = (ok, name) => `<span class="${ok ? 'ok' : 'no'}">${ok ? '✓' : '✗'} ${name}</span>`;
-  $('featStat').innerHTML = [f(features.light, 'Room lighting'), f(features.depth, 'Depth (hiding and bumping)'), f(features.camera, 'Camera access (hand tracking)'), f(hand.enabled, 'Hand tracking on')].join('<br>');
+  $('featStat').innerHTML = [f(features.light, 'Room lighting'), f(features.depth, 'Depth (hiding + real-shape physics)'), f(features.camera, 'Camera access (hand tracking)'), f(hand.enabled, 'Hand tracking on')].join('<br>');
 }
 let hintLock = 0;
 function showHint(text, ms) { const h = $('hint'); h.textContent = text; hintLock = performance.now() + (ms || 2500); }
@@ -1748,7 +1873,7 @@ function endPointer(e) {
       if (L > 60 && now - pDown.t < 800 && !trashMode) doSwipe(p);
     } else if (pDown.item && items.includes(pDown.item)) {
       if (trashMode) { removeItem(pDown.item, true); sfx.poof(); buzz(20); } else tap(pDown.item);
-    } else if (!trashMode) placeAtReticle();
+    } else if (!trashMode) placeAtReticle(e.clientX, e.clientY);
   }
   pDown = null;
 }
@@ -1822,7 +1947,7 @@ renderer.setAnimationLoop((t, frame) => {
         if (depthInfo) {
           if (!features.depth) { features.depth = true; updateFeatStat(); }
           updateDepthTexture(depthInfo);
-          scanObstacles(depthInfo, now);
+          scanRoom(depthInfo, now);
         }
       }
       const bl = frame.session.renderState.baseLayer;
@@ -1850,6 +1975,12 @@ renderer.setAnimationLoop((t, frame) => {
             if (floorY === null || y < floorY - 0.03) setFloor(y);
           }
         }
+      }
+      // Prefer the room scan where it's closer (e.g. a couch cushion or a mug on the table)
+      const sh = haveCam ? hfRay(camPos, ndcRay(0, 0)) : null;
+      if (sh) {
+        const planeP = shown ? new T.Vector3().setFromMatrixPosition(reticle.matrix) : null;
+        if (!planeP || sh.distanceTo(camPos) < planeP.distanceTo(camPos) - 0.05) { reticle.matrix.makeTranslation(sh.x, sh.y + 0.003, sh.z); shown = true; }
       }
       reticle.visible = shown && !held;
       if (now > hintLock) {

@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Grab &amp; Drop AR</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #111; color: #fff;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  #ui { position: fixed; inset: 0; }
+  #start { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 28px; text-align: center;
+    background: radial-gradient(circle at 50% 30%, #2b2350, #0e0c1a 70%); }
+  #start h1 { font-size: 34px; margin: 0 0 6px; letter-spacing: .5px; }
+  #start .emo { font-size: 44px; margin-bottom: 10px; letter-spacing: 6px; }
+  #start p { color: #c9c3e6; line-height: 1.45; max-width: 360px; margin: 8px 0; font-size: 15px; }
+  #startBtn { margin-top: 22px; font-size: 20px; font-weight: 700; padding: 16px 40px; border: 0;
+    border-radius: 999px; background: linear-gradient(135deg, #ff7eb6, #ffb347); color: #1b1030;
+    box-shadow: 0 6px 24px rgba(255,126,182,.4); }
+  #startBtn:disabled { opacity: .45; }
+  #msg { margin-top: 18px; color: #ffcf8a; font-size: 14px; max-width: 360px; line-height: 1.4; min-height: 20px; }
+  .howto { margin-top: 18px; text-align: left; font-size: 14px; color: #ddd8f5; background: rgba(255,255,255,.06);
+    border-radius: 14px; padding: 12px 16px; max-width: 360px; line-height: 1.6; }
+
+  #hud { position: absolute; inset: 0; display: none; }
+  #touch { position: absolute; inset: 0; touch-action: none; }
+  #top { position: absolute; top: 0; left: 0; right: 0; display: flex; gap: 8px; align-items: center;
+    padding: 12px; padding-top: max(12px, env(safe-area-inset-top)); pointer-events: none; }
+  .btn { pointer-events: auto; border: 0; border-radius: 14px; min-width: 46px; height: 46px; padding: 0 12px;
+    font-size: 15px; font-weight: 700; color: #fff; background: rgba(20,16,36,.62);
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  .btn.on { background: #e63946; }
+  #hint { position: absolute; top: 72px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 90%;
+    text-align: center; font-size: 14px; padding: 8px 14px; border-radius: 999px;
+    background: rgba(20,16,36,.62); pointer-events: none; transition: opacity .3s; }
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 8px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom)); display: flex; gap: 8px; overflow-x: auto;
+    background: linear-gradient(transparent, rgba(10,8,20,.75)); scrollbar-width: none; }
+  #bar::-webkit-scrollbar { display: none; }
+  .item { flex: 0 0 auto; width: 66px; height: 72px; border-radius: 16px; border: 2px solid transparent;
+    background: rgba(20,16,36,.62); color: #fff; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 2px; font-size: 11px; font-weight: 600; }
+  .item span { font-size: 30px; line-height: 1; }
+  .item.sel { border-color: #ffb347; background: rgba(255,179,71,.25); }
+  #help { position: absolute; left: 12px; right: 12px; top: 120px; padding: 16px 18px; border-radius: 18px;
+    background: rgba(20,16,36,.88); font-size: 15px; line-height: 1.65; display: none; }
+  #help b { color: #ffb347; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+} }
+</script>
+</head>
+<body>
+<div id="ui">
+  <div id="start">
+    <div class="emo">🍕🍩🍎⚽</div>
+    <h1>Grab &amp; Drop AR</h1>
+    <p>Put food and objects on your real floor or table, pick them up, throw them, stack them and take a bite.</p>
+    <button id="startBtn" disabled>Checking…</button>
+    <div id="msg"></div>
+    <div class="howto">
+      👆 <b>Tap</b> a surface to place the selected item<br>
+      ✋ <b>Press &amp; hold</b> an item to pick it up, then move your phone to carry it<br>
+      🫳 <b>Let go</b> to drop it, or flick your phone to throw<br>
+      😋 <b>Quick tap</b> food to take a bite, or other items to poke them
+    </div>
+  </div>
+
+  <div id="hud">
+    <div id="touch"></div>
+    <div id="top">
+      <button class="btn" id="exitBtn">✕</button>
+      <button class="btn" id="sizeBtn">Real size</button>
+      <div style="flex:1"></div>
+      <button class="btn" id="trashBtn">🗑</button>
+      <button class="btn" id="clearBtn">🧹</button>
+      <button class="btn" id="helpBtn">?</button>
+    </div>
+    <div id="hint">Point at the floor or a table and move your phone slowly</div>
+    <div id="help">
+      <b>Tap a surface</b>: place the selected item<br>
+      <b>Press &amp; hold an item</b>: pick it up and carry it with your phone<br>
+      <b>Let go</b>: drop it. <b>Flick your phone</b> as you let go to throw it<br>
+      <b>Quick tap food</b>: take a bite (3 bites and it's gone)<br>
+      <b>Quick tap other items</b>: poke them<br>
+      <b>🗑</b>: trash mode, so tapping removes items<br>
+      <b>🧹</b>: clear everything<br>
+      <b>Size</b>: Real, Big, Giant or Tiny for new items<br><br>
+      Tip: find the floor first, then point at a table to place things on it.
+    </div>
+    <div id="bar"></div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
+
+const T = THREE, C = CANNON;
+const $ = id => document.getElementById(id);
+
+/* ---------------- Renderer / scene ---------------- */
+const renderer = new T.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = T.PCFSoftShadowMap;
+renderer.domElement.style.cssText = 'position:fixed;inset:0;z-index:-1';
+document.body.appendChild(renderer.domElement);
+
+const scene = new T.Scene();
+const camera = new T.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 50);
+scene.add(new T.HemisphereLight(0xffffff, 0x5a5a66, 1.25));
+const sun = new T.DirectionalLight(0xffffff, 1.6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+Object.assign(sun.shadow.camera, { left: -1.6, right: 1.6, top: 1.6, bottom: -1.6, near: 0.1, far: 8 });
+sun.shadow.bias = -0.0006;
+scene.add(sun, sun.target);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// Reticle
+const reticle = new T.Group();
+const ring = new T.Mesh(new T.RingGeometry(0.06, 0.075, 40).rotateX(-Math.PI / 2),
+  new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 }));
+const dot = new T.Mesh(new T.CircleGeometry(0.012, 20).rotateX(-Math.PI / 2),
+  new T.MeshBasicMaterial({ color: 0xffb347 }));
+reticle.add(ring, dot);
+reticle.matrixAutoUpdate = false;
+reticle.visible = false;
+scene.add(reticle);
+
+/* ---------------- Physics ---------------- */
+const world = new C.World({ gravity: new C.Vec3(0, -9.81, 0) });
+world.broadphase = new C.SAPBroadphase(world);
+world.allowSleep = true;
+world.solver.iterations = 12;
+world.defaultContactMaterial.friction = 0.5;
+world.defaultContactMaterial.restitution = 0.1;
+const groundMat = new C.Material({ friction: 1, restitution: 1 });
+
+let floorY = null, floorBody = null, floorShadow = null;
+const slabs = []; // {body, mesh, x, y, z}
+const shadowMat = new T.ShadowMaterial({ opacity: 0.32 });
+
+function setFloor(y) {
+  const old = floorY;
+  floorY = y;
+  if (!floorBody) {
+    floorBody = new C.Body({ mass: 0, material: groundMat, shape: new C.Plane() });
+    floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+    world.addBody(floorBody);
+    floorShadow = new T.Mesh(new T.PlaneGeometry(30, 30).rotateX(-Math.PI / 2), shadowMat);
+    floorShadow.receiveShadow = true;
+    scene.add(floorShadow);
+  }
+  floorBody.position.set(0, y, 0);
+  floorShadow.position.set(0, y + 0.001, 0);
+  // If the "floor" we had was really a table, keep a surface there for anything resting on it.
+  if (old !== null && old - y > 0.15) {
+    for (const it of items) {
+      const p = it.body.position;
+      if (p.y > old - 0.05 && p.y < old + 0.4) ensureSlab(p.x, old, p.z);
+    }
+  }
+}
+
+function ensureSlab(x, y, z) {
+  if (floorY !== null && y < floorY + 0.12) return;
+  for (const s of slabs) {
+    if (Math.abs(s.y - y) < 0.05 && Math.hypot(s.x - x, s.z - z) < 0.3) return;
+  }
+  const half = 0.35, thick = 0.05;
+  const body = new C.Body({ mass: 0, material: groundMat, shape: new C.Box(new C.Vec3(half, thick, half)) });
+  body.position.set(x, y - thick, z);
+  world.addBody(body);
+  const mesh = new T.Mesh(new T.PlaneGeometry(half * 2, half * 2).rotateX(-Math.PI / 2), shadowMat);
+  mesh.position.set(x, y + 0.001, z);
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  slabs.push({ body, mesh, x, y, z });
+}
+
+/* ---------------- Audio ---------------- */
+let actx = null;
+function initAudio() { try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); } catch (e) {} }
+function noiseBuf(dur) {
+  const b = actx.createBuffer(1, Math.max(1, actx.sampleRate * dur), actx.sampleRate);
+  const d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return b;
+}
+function tone(f0, f1, dur, vol, type = 'sine', delay = 0) {
+  if (!actx) return;
+  const t = actx.currentTime + delay, o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+function noise(dur, vol, freq, q = 1, type = 'lowpass', delay = 0, sweepTo = null) {
+  if (!actx) return;
+  const t = actx.currentTime + delay, s = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+  s.buffer = noiseBuf(dur); f.type = type; f.frequency.setValueAtTime(freq, t); f.Q.value = q;
+  if (sweepTo) f.frequency.exponentialRampToValueAtTime(sweepTo, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  s.connect(f).connect(g).connect(actx.destination); s.start(t);
+}
+const SOUNDS = {
+  soft:    v => noise(0.08, 0.25 * v, 500),
+  fruit:   v => { tone(220, 120, 0.08, 0.25 * v); noise(0.05, 0.12 * v, 900); },
+  heavy:   v => { tone(90, 40, 0.25, 0.5 * v); noise(0.12, 0.25 * v, 300); },
+  ceramic: v => { tone(1800, 1500, 0.15, 0.12 * v, 'triangle'); tone(2600, 2300, 0.1, 0.06 * v, 'sine'); noise(0.04, 0.15 * v, 4000, 2, 'bandpass'); },
+  bounce:  v => tone(180, 90, 0.12, 0.35 * v),
+  wood:    v => { tone(700, 500, 0.06, 0.2 * v, 'triangle'); noise(0.04, 0.15 * v, 1500, 3, 'bandpass'); },
+  plastic: v => { tone(500, 350, 0.06, 0.15 * v, 'square'); noise(0.04, 0.1 * v, 2000, 2, 'bandpass'); },
+};
+const sfx = {
+  place: () => tone(500, 900, 0.08, 0.15),
+  grab:  () => tone(300, 600, 0.07, 0.15, 'triangle'),
+  chomp: () => { noise(0.07, 0.4, 1200, 2, 'bandpass'); noise(0.07, 0.35, 900, 2, 'bandpass', 0.11); },
+  slurp: () => noise(0.35, 0.3, 600, 6, 'bandpass', 0, 2400),
+  boing: () => { tone(150, 600, 0.25, 0.25, 'sine'); },
+  poof:  () => noise(0.25, 0.3, 3000, 1, 'lowpass', 0, 200),
+};
+const buzz = ms => { try { navigator.vibrate && navigator.vibrate(ms); } catch (e) {} };
+
+/* ---------------- Item models ---------------- */
+const M = (c, r = 0.7, m = 0, extra = {}) => new T.MeshStandardMaterial({ color: c, roughness: r, metalness: m, ...extra });
+function part(geo, mat, x = 0, y = 0, z = 0) {
+  const m = new T.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; return m;
+}
+const cyl = (r, h, o) => ({ s: new C.Cylinder(r, r, h, 14), o });
+function stripeTex(colors, bg, wavy) {
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 128;
+  const g = cv.getContext('2d'); g.fillStyle = bg; g.fillRect(0, 0, 256, 128);
+  const n = colors.length, w = 256 / n;
+  colors.forEach((c, i) => {
+    g.fillStyle = c; g.beginPath();
+    if (wavy) {
+      for (let y = 0; y <= 128; y += 4) g.lineTo(i * w + Math.sin(y * 0.15 + i) * 5, y);
+      for (let y = 128; y >= 0; y -= 4) g.lineTo(i * w + w * 0.45 + Math.sin(y * 0.15 + i + 1) * 5, y);
+    } else { g.rect(i * w, 0, w, 128); }
+    g.fill();
+  });
+  if (!wavy) { g.fillStyle = '#fff'; g.fillRect(0, 0, 256, 10); g.fillRect(0, 118, 256, 10); }
+  const t = new T.CanvasTexture(cv); t.colorSpace = T.SRGBColorSpace; return t;
+}
+let melonTex, beachTex;
+
+const ITEMS = {
+  pizza: { emoji: '🍕', label: 'Pizza', mass: 0.6, rest: 0.05, fric: 0.8, kind: 'food', sound: 'soft',
+    build(s) {
+      const g = new T.Group(), R = 0.15 * s, h = 0.016 * s;
+      g.add(part(new T.CylinderGeometry(R, R, h, 32), M(0xd9a35b, 0.9)));
+      g.add(part(new T.CylinderGeometry(R * 0.88, R * 0.88, h * 0.3, 32), M(0xc0392b), 0, h * 0.55, 0));
+      g.add(part(new T.CylinderGeometry(R * 0.84, R * 0.84, h * 0.3, 32), M(0xf7d774, 0.5), 0, h * 0.75, 0));
+      const pep = M(0xa52a2a, 0.6);
+      for (let i = 0; i < 10; i++) {
+        const a = i * 2.4, d = R * (0.2 + 0.55 * ((i * 0.37) % 1));
+        g.add(part(new T.CylinderGeometry(0.018 * s, 0.018 * s, 0.004 * s, 14), pep, Math.cos(a) * d, h * 0.95, Math.sin(a) * d));
+      }
+      return { g, shapes: [cyl(R, h)], r: R };
+    } },
+  burger: { emoji: '🍔', label: 'Burger', mass: 0.3, rest: 0.05, fric: 0.8, kind: 'food', sound: 'soft',
+    build(s) {
+      const g = new T.Group(), R = 0.055 * s, k = s;
+      const bun = M(0xd99a4e, 0.8);
+      g.add(part(new T.CylinderGeometry(R, R * 0.95, 0.016 * k, 24), bun, 0, -0.032 * k, 0));
+      g.add(part(new T.CylinderGeometry(R * 1.02, R * 1.02, 0.014 * k, 24), M(0x5a3a1e, 0.9), 0, -0.017 * k, 0));
+      const ch = part(new T.BoxGeometry(R * 1.75, 0.004 * k, R * 1.75), M(0xffc93c, 0.5), 0, -0.008 * k, 0);
+      ch.rotation.y = Math.PI / 4; g.add(ch);
+      g.add(part(new T.CylinderGeometry(R * 1.1, R * 1.1, 0.005 * k, 18), M(0x5cb85c), 0, -0.003 * k, 0));
+      g.add(part(new T.CylinderGeometry(R * 0.95, R * 0.95, 0.006 * k, 18), M(0xe74c3c), 0, 0.003 * k, 0));
+      const top = part(new T.SphereGeometry(R, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), bun, 0, 0.006 * k, 0);
+      top.scale.y = 0.75; g.add(top);
+      const seed = M(0xfff4d6, 0.6);
+      for (let i = 0; i < 9; i++) {
+        const a = i * 2.1, el = 0.35 + (i % 3) * 0.3;
+        const sd = part(new T.SphereGeometry(0.004 * k, 6, 4), seed,
+          Math.cos(a) * Math.cos(el) * R, 0.006 * k + Math.sin(el) * R * 0.75, Math.sin(a) * Math.cos(el) * R);
+        sd.scale.set(1, 0.5, 0.6); g.add(sd);
+      }
+      return { g, shapes: [cyl(R, 0.085 * k, [0, 0.0035 * k, 0])], r: R * 1.1 };
+    } },
+  donut: { emoji: '🍩', label: 'Donut', mass: 0.08, rest: 0.1, fric: 0.7, kind: 'food', sound: 'soft',
+    build(s) {
+      const g = new T.Group(), R = 0.045 * s, tb = 0.022 * s;
+      const d = part(new T.TorusGeometry(R, tb, 14, 30), M(0xd4924a, 0.8)); d.rotation.x = Math.PI / 2; g.add(d);
+      const ic = part(new T.TorusGeometry(R, tb * 1.03, 12, 30, Math.PI * 2), M(0xff7eb6, 0.4));
+      ic.rotation.x = Math.PI / 2; ic.scale.z = 0.55; ic.position.y = tb * 0.35; g.add(ic);
+      const cols = [0xffffff, 0x4ecdc4, 0xffe66d, 0x6a4c93];
+      for (let i = 0; i < 22; i++) {
+        const a = i * 0.9, rr = R + Math.sin(i * 3.3) * tb * 0.6;
+        const sp = part(new T.BoxGeometry(0.008 * s, 0.002 * s, 0.002 * s), M(cols[i % 4], 0.5), Math.cos(a) * rr, tb * 0.95, Math.sin(a) * rr);
+        sp.rotation.y = i; g.add(sp);
+      }
+      return { g, shapes: [cyl(R + tb, tb * 2)], r: R + tb };
+    } },
+  apple: { emoji: '🍎', label: 'Apple', mass: 0.18, rest: 0.35, fric: 0.6, kind: 'food', sound: 'fruit',
+    build(s) {
+      const g = new T.Group(), R = 0.04 * s;
+      const a = part(new T.SphereGeometry(R, 24, 18), M(0xd62828, 0.35)); a.scale.y = 0.92; g.add(a);
+      g.add(part(new T.CylinderGeometry(0.002 * s, 0.003 * s, 0.018 * s, 6), M(0x5b3a1a), 0, R * 0.95, 0));
+      const lf = part(new T.SphereGeometry(0.009 * s, 8, 6), M(0x3a9d23), 0.008 * s, R * 1.02, 0);
+      lf.scale.set(1.4, 0.25, 0.7); g.add(lf);
+      return { g, shapes: [{ s: new C.Sphere(R) }], r: R };
+    } },
+  orange: { emoji: '🍊', label: 'Orange', mass: 0.2, rest: 0.4, fric: 0.6, kind: 'food', sound: 'fruit',
+    build(s) {
+      const g = new T.Group(), R = 0.04 * s;
+      g.add(part(new T.SphereGeometry(R, 24, 18), M(0xff8c1a, 0.95)));
+      g.add(part(new T.SphereGeometry(0.005 * s, 8, 6), M(0x4f772d), 0, R * 0.98, 0));
+      return { g, shapes: [{ s: new C.Sphere(R) }], r: R };
+    } },
+  banana: { emoji: '🍌', label: 'Banana', mass: 0.13, rest: 0.1, fric: 0.6, kind: 'food', sound: 'soft',
+    build(s) {
+      const g = new T.Group(), pts = [];
+      for (let i = 0; i <= 8; i++) { const a = -0.9 + i * 0.225; pts.push(new T.Vector3(Math.sin(a) * 0.1 * s, 0, -Math.cos(a) * 0.1 * s)); }
+      const geo = new T.TubeGeometry(new T.CatmullRomCurve3(pts), 24, 0.017 * s, 10);
+      geo.computeBoundingBox(); const c = new T.Vector3(); geo.boundingBox.getCenter(c); geo.translate(-c.x, -c.y, -c.z);
+      g.add(part(geo, M(0xffe135, 0.55)));
+      const tip = M(0x4a3b1f);
+      [pts[0], pts[8]].forEach(p => g.add(part(new T.SphereGeometry(0.008 * s, 8, 6), tip, p.x - c.x, 0, p.z - c.z)));
+      return { g, shapes: [{ s: new C.Box(new C.Vec3(0.085 * s, 0.017 * s, 0.03 * s)), o: [0, 0, 0.012 * s] }], r: 0.09 * s };
+    } },
+  watermelon: { emoji: '🍉', label: 'Melon', mass: 4, rest: 0.15, fric: 0.7, kind: 'food', sound: 'heavy',
+    build(s) {
+      const g = new T.Group(), R = 0.12 * s;
+      melonTex = melonTex || stripeTex(Array(12).fill('#1f5a24'), '#5aa84a', true);
+      g.add(part(new T.SphereGeometry(R, 32, 22), M(0xffffff, 0.45, 0, { map: melonTex })));
+      return { g, shapes: [{ s: new C.Sphere(R) }], r: R };
+    } },
+  cake: { emoji: '🎂', label: 'Cake', mass: 1.2, rest: 0.02, fric: 0.8, kind: 'food', sound: 'soft',
+    build(s) {
+      const g = new T.Group(), R = 0.1 * s;
+      g.add(part(new T.CylinderGeometry(R, R, 0.08 * s, 36), M(0xfff1e6, 0.6), 0, -0.006 * s, 0));
+      g.add(part(new T.CylinderGeometry(R * 1.02, R * 1.02, 0.012 * s, 36), M(0xff8fab, 0.4), 0, 0.04 * s, 0));
+      for (let i = 0; i < 12; i++) {
+        const a = i / 12 * Math.PI * 2;
+        g.add(part(new T.SphereGeometry(0.008 * s, 8, 6), M(0xff8fab, 0.4), Math.cos(a) * R, 0.03 * s, Math.sin(a) * R));
+        g.add(part(new T.SphereGeometry(0.006 * s, 8, 6), M(0xc1121f, 0.3), Math.cos(a) * R * 0.75, 0.05 * s, Math.sin(a) * R * 0.75));
+      }
+      g.add(part(new T.CylinderGeometry(0.005 * s, 0.005 * s, 0.045 * s, 8), M(0x8ecae6), 0, 0.068 * s, 0));
+      const fl = part(new T.SphereGeometry(0.007 * s, 8, 6), new T.MeshBasicMaterial({ color: 0xffc300 }), 0, 0.096 * s, 0);
+      fl.scale.y = 1.7; fl.castShadow = false; g.add(fl);
+      return { g, shapes: [cyl(R, 0.092 * s, [0, 0, 0])], r: R };
+    } },
+  pancakes: { emoji: '🥞', label: 'Pancakes', mass: 0.25, rest: 0.02, fric: 0.8, kind: 'food', sound: 'soft',
+    build(s) {
+      const g = new T.Group(), R = 0.07 * s;
+      for (let i = 0; i < 3; i++) g.add(part(new T.CylinderGeometry(R, R * 0.97, 0.011 * s, 28), M(0xe0a458, 0.8), 0, (-0.0165 + i * 0.011) * s, 0));
+      g.add(part(new T.CylinderGeometry(R * 0.8, R * 0.8, 0.002 * s, 28), M(0x9c4f12, 0.15, 0, { transparent: true, opacity: 0.85 }), 0, 0.0115 * s, 0));
+      g.add(part(new T.BoxGeometry(0.02 * s, 0.01 * s, 0.02 * s), M(0xfff3b0, 0.4), 0, 0.017 * s, 0));
+      return { g, shapes: [cyl(R, 0.044 * s, [0, 0, 0])], r: R };
+    } },
+  soda: { emoji: '🥤', label: 'Soda', mass: 0.45, rest: 0.1, fric: 0.5, kind: 'drink', sound: 'plastic',
+    build(s) {
+      const g = new T.Group();
+      g.add(part(new T.CylinderGeometry(0.045 * s, 0.035 * s, 0.14 * s, 24), M(0xe63946, 0.5)));
+      g.add(part(new T.CylinderGeometry(0.0425 * s, 0.039 * s, 0.025 * s, 24), M(0xffffff, 0.5), 0, 0.015 * s, 0));
+      g.add(part(new T.CylinderGeometry(0.047 * s, 0.047 * s, 0.008 * s, 24), M(0xf1faee, 0.4), 0, 0.074 * s, 0));
+      const st = part(new T.CylinderGeometry(0.004 * s, 0.004 * s, 0.1 * s, 8), M(0x2a9d8f, 0.4), 0.01 * s, 0.11 * s, 0);
+      st.rotation.z = -0.2; g.add(st);
+      return { g, shapes: [{ s: new C.Cylinder(0.046 * s, 0.035 * s, 0.15 * s, 14), o: [0, 0.003 * s, 0] }], r: 0.08 * s };
+    } },
+  plate: { emoji: '🍽️', label: 'Plate', mass: 0.4, rest: 0.2, fric: 0.6, kind: 'object', sound: 'ceramic',
+    build(s) {
+      const g = new T.Group();
+      const prof = [[0, 0], [0.1, 0], [0.12, 0.012], [0.13, 0.017], [0.127, 0.019], [0.117, 0.015], [0.097, 0.005], [0, 0.005]]
+        .map(([x, y]) => new T.Vector2(x * s, (y - 0.0095) * s));
+      g.add(part(new T.LatheGeometry(prof, 40), M(0xf5f5f5, 0.25, 0, { side: T.DoubleSide })));
+      return { g, shapes: [cyl(0.13 * s, 0.019 * s)], r: 0.13 * s };
+    } },
+  bowl: { emoji: '🥣', label: 'Bowl', mass: 0.35, rest: 0.2, fric: 0.6, kind: 'object', sound: 'ceramic',
+    build(s) {
+      const g = new T.Group();
+      const prof = [[0, 0], [0.04, 0], [0.05, 0.005], [0.07, 0.03], [0.08, 0.06], [0.074, 0.06], [0.064, 0.033], [0.045, 0.011], [0, 0.011]]
+        .map(([x, y]) => new T.Vector2(x * s, (y - 0.03) * s));
+      g.add(part(new T.LatheGeometry(prof, 40), M(0x4ea8de, 0.3, 0, { side: T.DoubleSide })));
+      const shapes = [cyl(0.048 * s, 0.011 * s, [0, -0.0245 * s, 0])];
+      const n = 10, tq = new T.Quaternion(), tx = new T.Quaternion();
+      for (let i = 0; i < n; i++) {
+        const a = i / n * Math.PI * 2;
+        tq.setFromAxisAngle(new T.Vector3(0, 1, 0), Math.PI / 2 - a);
+        tx.setFromAxisAngle(new T.Vector3(1, 0, 0), 0.45);
+        tq.multiply(tx);
+        shapes.push({ s: new C.Box(new C.Vec3(0.024 * s, 0.031 * s, 0.004 * s)),
+          o: [Math.cos(a) * 0.066 * s, 0.002 * s, Math.sin(a) * 0.066 * s], q: new C.Quaternion(tq.x, tq.y, tq.z, tq.w) });
+      }
+      return { g, shapes, r: 0.08 * s };
+    } },
+  ball: { emoji: '🏐', label: 'Ball', mass: 0.4, rest: 0.82, fric: 0.6, kind: 'ball', sound: 'bounce',
+    build(s) {
+      const g = new T.Group(), R = 0.11 * s;
+      beachTex = beachTex || stripeTex(['#e63946', '#ffffff', '#ffb703', '#ffffff', '#219ebc', '#ffffff'], '#fff', false);
+      g.add(part(new T.SphereGeometry(R, 32, 22), M(0xffffff, 0.35, 0, { map: beachTex })));
+      return { g, shapes: [{ s: new C.Sphere(R) }], r: R };
+    } },
+  bowling: { emoji: '🎳', label: 'Bowling', mass: 6, rest: 0.05, fric: 0.4, kind: 'object', sound: 'heavy',
+    build(s) {
+      const g = new T.Group(), R = 0.108 * s;
+      g.add(part(new T.SphereGeometry(R, 32, 22), M(0x3a0ca3, 0.12, 0.2)));
+      const hole = M(0x05010f, 0.9);
+      [[0, 0], [0.32, 0.25], [-0.32, 0.25]].forEach(([a, b]) => {
+        const v = new T.Vector3(Math.sin(a) * 0.35, 0.93, b * 0.3).normalize();
+        const h = part(new T.CircleGeometry(0.012 * s, 14), hole, v.x * R * 1.002, v.y * R * 1.002, v.z * R * 1.002);
+        h.lookAt(v.clone().multiplyScalar(R * 3)); g.add(h);
+      });
+      return { g, shapes: [{ s: new C.Sphere(R) }], r: R };
+    } },
+  block: { emoji: '🧱', label: 'Block', mass: 0.12, rest: 0.2, fric: 0.7, kind: 'object', sound: 'wood',
+    build(s) {
+      const g = new T.Group(), e = 0.06 * s;
+      const cols = [0xe63946, 0x457b9d, 0xffb703, 0x2a9d8f, 0x8338ec, 0xfb5607];
+      g.add(part(new T.BoxGeometry(e, e, e), M(cols[(Math.random() * cols.length) | 0], 0.55)));
+      return { g, shapes: [{ s: new C.Box(new C.Vec3(e / 2, e / 2, e / 2)) }], r: e * 0.8 };
+    } },
+};
+
+/* ---------------- Items in the world ---------------- */
+const items = [];
+const MAX_ITEMS = 45;
+let selected = 'pizza';
+const SIZES = [{ n: 'Real size', s: 1 }, { n: 'Big ×2', s: 2 }, { n: 'Giant ×5', s: 5 }, { n: 'Tiny ×½', s: 0.5 }];
+let sizeIdx = 0;
+
+function spawn(type, scale, pos, quat) {
+  const def = ITEMS[type];
+  const { g, shapes, r } = def.build(scale);
+  const mass = def.mass * scale * scale * scale;
+  if (!def.mat) {
+    def.mat = new C.Material(type);
+    world.addContactMaterial(new C.ContactMaterial(def.mat, groundMat, { friction: def.fric, restitution: def.rest }));
+    for (const other of Object.values(ITEMS)) if (other.mat) {
+      world.addContactMaterial(new C.ContactMaterial(def.mat, other.mat,
+        { friction: Math.sqrt(def.fric * other.fric), restitution: def.rest * other.rest }));
+    }
+  }
+  const body = new C.Body({ mass, material: def.mat,
+    linearDamping: 0.05, angularDamping: 0.12 });
+  for (const sh of shapes) {
+    body.addShape(sh.s, sh.o ? new C.Vec3(...sh.o) : undefined, sh.q);
+  }
+  body.sleepSpeedLimit = 0.08; body.sleepTimeLimit = 0.6;
+  body.position.set(pos.x, pos.y, pos.z);
+  if (quat) body.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+  world.addBody(body);
+  scene.add(g);
+  const it = { type, scale, body, mesh: g, r, bites: 0, lastSound: 0, empty: false };
+  body.addEventListener('collide', e => {
+    const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
+    const now = performance.now();
+    if (v > 0.5 && now - it.lastSound > 90) {
+      it.lastSound = now;
+      SOUNDS[def.sound](Math.min(1, v / 4) * Math.min(1.5, 0.6 + scale * 0.4));
+    }
+  });
+  items.push(it);
+  if (items.length > MAX_ITEMS) removeItem(items[0]);
+  return it;
+}
+
+function removeItem(it, poof = false) {
+  const i = items.indexOf(it); if (i < 0) return;
+  items.splice(i, 1);
+  if (held && held.item === it) held = null;
+  world.removeBody(it.body);
+  scene.remove(it.mesh);
+  it.mesh.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+  if (poof) burst(it.body.position, 0xffffff, 16, it.r);
+}
+
+/* Crumbs / particles */
+const parts = [];
+const crumbGeo = new T.BoxGeometry(1, 1, 1);
+function burst(p, color, n, r) {
+  for (let i = 0; i < n; i++) {
+    const m = new T.Mesh(crumbGeo, M(color, 0.8));
+    const sz = (0.004 + Math.random() * 0.006) * Math.max(1, r / 0.05);
+    m.scale.setScalar(sz);
+    m.position.set(p.x, p.y + r * 0.5, p.z);
+    const v = new T.Vector3((Math.random() - 0.5) * 1.2, Math.random() * 1.4 + 0.4, (Math.random() - 0.5) * 1.2);
+    scene.add(m); parts.push({ m, v, life: 1.1 });
+  }
+}
+const CRUMB = { pizza: 0xd9a35b, burger: 0xd99a4e, donut: 0xd4924a, apple: 0xfff4d6, orange: 0xff8c1a, banana: 0xfff1a8,
+  watermelon: 0xe63946, cake: 0xfff1e6, pancakes: 0xe0a458, soda: 0xe63946 };
+
+/* ---------------- Interactions ---------------- */
+function interact(it) {
+  const def = ITEMS[it.type], b = it.body;
+  b.wakeUp();
+  if (def.kind === 'food') {
+    sfx.chomp(); buzz(25);
+    burst(b.position, CRUMB[it.type] || 0xddbb88, 8, it.r);
+    if (it.bites >= 2) { removeItem(it); burst(b.position, CRUMB[it.type] || 0xddbb88, 10, it.r); showHint('Yum! All gone 😋', 1500); return; }
+    const p = b.position.clone(), q = b.quaternion.clone(), v = b.velocity.clone();
+    const bites = it.bites + 1;
+    removeItem(it);
+    const n = spawn(it.type, it.scale * 0.78, p, q);
+    n.body.velocity.copy(v); n.bites = bites;
+  } else if (def.kind === 'drink') {
+    if (it.empty) { pokeIt(it, 1.2); return; }
+    sfx.slurp(); buzz(30); it.bites++;
+    if (it.bites >= 3) { it.empty = true; b.mass = 0.02 * it.scale ** 3; b.updateMassProperties(); showHint('Empty! Now it\'s super light 🥤', 1600); }
+  } else if (def.kind === 'ball') {
+    sfx.boing(); buzz(15);
+    pokeIt(it, 0.8); b.velocity.y += 2.6;
+  } else {
+    pokeIt(it, it.type === 'bowling' ? 1.6 : 1.3);
+  }
+}
+function pokeIt(it, speed) {
+  const b = it.body, d = new T.Vector3(b.position.x - camPos.x, 0, b.position.z - camPos.z);
+  if (d.lengthSq() < 1e-6) d.set(0, 0, -1);
+  d.normalize();
+  b.velocity.x += d.x * speed; b.velocity.z += d.z * speed; b.velocity.y += speed * 0.5;
+  b.angularVelocity.set((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6);
+  b.wakeUp(); buzz(10);
+}
+
+function placeAtReticle() {
+  if (!reticle.visible) { showHint('No surface yet. Move your phone slowly over the floor', 1800); return; }
+  const p = new T.Vector3().setFromMatrixPosition(reticle.matrix);
+  ensureSlab(p.x, p.y, p.z);
+  const sc = SIZES[sizeIdx].s;
+  const yaw = Math.atan2(camPos.x - p.x, camPos.z - p.z) + (Math.random() - 0.5) * 0.6;
+  const q = new T.Quaternion().setFromAxisAngle(new T.Vector3(0, 1, 0), yaw);
+  const it = spawn(selected, sc, new T.Vector3(p.x, p.y + 0.06 * sc + 0.03, p.z), q);
+  it.body.position.y = p.y + boundHalfY(it) + 0.02;
+  sfx.place(); buzz(12);
+}
+function boundHalfY(it) {
+  it.body.updateAABB();
+  return (it.body.aabb.upperBound.y - it.body.aabb.lowerBound.y) / 2;
+}
+
+/* ---------------- Grabbing (phone is your hand) ---------------- */
+let held = null;
+function startGrab(it) {
+  const b = it.body;
+  const local = new T.Vector3(b.position.x, b.position.y, b.position.z).sub(camPos).applyQuaternion(camQuat.clone().invert());
+  const len = local.length();
+  if (len > 1.4) local.setLength(1.4); else if (len < 0.25) local.setLength(0.25);
+  const relQ = camQuat.clone().invert().multiply(new T.Quaternion(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w));
+  b.type = C.Body.KINEMATIC;
+  b.updateSolveMassProperties && b.updateSolveMassProperties();
+  b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0);
+  b.wakeUp();
+  held = { item: it, local, relQ, hist: [] };
+  sfx.grab(); buzz(30);
+  showHint('Move your phone to carry it. Let go to drop, flick to throw', 2500);
+}
+function releaseGrab() {
+  if (!held) return;
+  const { item, hist } = held; held = null;
+  const b = item.body;
+  b.type = C.Body.DYNAMIC;
+  b.updateMassProperties();
+  b.updateSolveMassProperties && b.updateSolveMassProperties();
+  const v = new T.Vector3();
+  if (hist.length > 1) {
+    const a = hist[0], z = hist[hist.length - 1], dt = (z.t - a.t) / 1000;
+    if (dt > 0.02) v.copy(z.p).sub(a.p).divideScalar(dt).multiplyScalar(1.15);
+  }
+  if (v.length() > 9) v.setLength(9);
+  if (v.length() < 0.15) v.set(0, 0, 0);
+  b.velocity.set(v.x, v.y, v.z);
+  const sp = v.length();
+  b.angularVelocity.set((Math.random() - 0.5) * sp * 2, (Math.random() - 0.5) * sp * 2, (Math.random() - 0.5) * sp * 2);
+  b.wakeUp();
+  buzz(15);
+}
+function updateHeld(dt, now) {
+  if (!held) return;
+  const b = held.item.body;
+  const target = held.local.clone().applyQuaternion(camQuat).add(camPos);
+  if (floorY !== null) target.y = Math.max(target.y, floorY + held.item.r * 0.7);
+  const q = camQuat.clone().multiply(held.relQ);
+  b.velocity.set((target.x - b.position.x) / dt, (target.y - b.position.y) / dt, (target.z - b.position.z) / dt);
+  b.angularVelocity.set(0, 0, 0);
+  held.target = target; held.q = q;
+  held.hist.push({ t: now, p: target.clone() });
+  while (held.hist.length && now - held.hist[0].t > 120) held.hist.shift();
+}
+function snapHeld() {
+  if (!held || !held.target) return;
+  const b = held.item.body, t = held.target, q = held.q;
+  b.position.set(t.x, t.y, t.z);
+  b.quaternion.set(q.x, q.y, q.z, q.w);
+}
+
+/* ---------------- Picking with screen taps ---------------- */
+const camPos = new T.Vector3(), camQuat = new T.Quaternion(), projInv = new T.Matrix4();
+let haveCam = false;
+function rayFromScreen(x, y) {
+  const nx = (x / innerWidth) * 2 - 1, ny = -(y / innerHeight) * 2 + 1;
+  const d = new T.Vector3(nx, ny, 0.5).applyMatrix4(projInv).normalize().applyQuaternion(camQuat);
+  return { o: camPos.clone(), d };
+}
+function pickItem(x, y) {
+  if (!haveCam) return null;
+  const { o, d } = rayFromScreen(x, y);
+  let best = null, bestT = Infinity;
+  const v = new T.Vector3();
+  for (const it of items) {
+    const p = it.body.position;
+    v.set(p.x - o.x, p.y - o.y, p.z - o.z);
+    const t = v.dot(d);
+    if (t < 0.05) continue;
+    const d2 = v.lengthSq() - t * t;
+    const rr = it.r * 1.15 + 0.02 + t * 0.02;
+    if (d2 < rr * rr && t < bestT) { bestT = t; best = it; }
+  }
+  return best;
+}
+
+/* ---------------- UI ---------------- */
+const bar = $('bar');
+for (const [key, def] of Object.entries(ITEMS)) {
+  const b = document.createElement('button');
+  b.className = 'item' + (key === selected ? ' sel' : '');
+  b.innerHTML = `<span>${def.emoji}</span>${def.label}`;
+  b.onclick = () => {
+    selected = key;
+    bar.querySelectorAll('.item').forEach(x => x.classList.remove('sel'));
+    b.classList.add('sel');
+    if (trashMode) setTrash(false);
+    showHint(`${def.emoji} ${def.label} selected. Tap a surface to place`, 1400);
+  };
+  bar.appendChild(b);
+}
+let trashMode = false;
+function setTrash(on) { trashMode = on; $('trashBtn').classList.toggle('on', on); showHint(on ? 'Trash mode: tap items to remove them' : 'Trash mode off', 1500); }
+$('trashBtn').onclick = () => setTrash(!trashMode);
+$('clearBtn').onclick = () => { [...items].forEach(it => removeItem(it, true)); sfx.poof(); showHint('All cleared', 1200); };
+$('sizeBtn').onclick = () => { sizeIdx = (sizeIdx + 1) % SIZES.length; $('sizeBtn').textContent = SIZES[sizeIdx].n; };
+$('helpBtn').onclick = () => { const h = $('help'); h.style.display = h.style.display === 'block' ? 'none' : 'block'; };
+$('help').onclick = () => { $('help').style.display = 'none'; };
+$('exitBtn').onclick = () => { const s = renderer.xr.getSession(); if (s) s.end(); };
+// Keep taps on buttons from also counting as AR "select" taps.
+document.querySelectorAll('#top, #bar, #help').forEach(el => el.addEventListener('beforexrselect', e => e.preventDefault()));
+
+let hintTimer = null, hintLock = 0;
+function showHint(text, ms) {
+  const h = $('hint'); h.textContent = text; h.style.opacity = 1;
+  hintLock = performance.now() + (ms || 0);
+  clearTimeout(hintTimer);
+  if (ms) hintTimer = setTimeout(() => { hintLock = 0; }, ms);
+}
+
+/* Touch handling on the AR view */
+const touch = $('touch');
+let pDown = null;
+touch.addEventListener('pointerdown', e => {
+  if (pDown) return;
+  const it = pickItem(e.clientX, e.clientY);
+  pDown = { id: e.pointerId, x: e.clientX, y: e.clientY, item: it, moved: false, timer: null };
+  if (it && !trashMode) {
+    pDown.timer = setTimeout(() => {
+      if (pDown && !pDown.moved && items.includes(pDown.item)) startGrab(pDown.item);
+    }, 230);
+  }
+});
+touch.addEventListener('pointermove', e => {
+  if (!pDown || e.pointerId !== pDown.id || held) return;
+  if (Math.hypot(e.clientX - pDown.x, e.clientY - pDown.y) > 18) { pDown.moved = true; clearTimeout(pDown.timer); }
+});
+function endPointer(e) {
+  if (!pDown || e.pointerId !== pDown.id) return;
+  clearTimeout(pDown.timer);
+  if (held) releaseGrab();
+  else if (!pDown.moved && e.type === 'pointerup') {
+    if (pDown.item && items.includes(pDown.item)) {
+      if (trashMode) { removeItem(pDown.item, true); sfx.poof(); buzz(20); }
+      else interact(pDown.item);
+    } else if (!trashMode) placeAtReticle();
+  }
+  pDown = null;
+}
+touch.addEventListener('pointerup', endPointer);
+touch.addEventListener('pointercancel', endPointer);
+
+/* ---------------- XR session ---------------- */
+let hitSource = null, xrActive = false;
+const startBtn = $('startBtn'), msg = $('msg');
+
+async function checkSupport() {
+  if (!window.isSecureContext) {
+    startBtn.textContent = 'AR not available';
+    msg.textContent = 'AR needs a secure https:// link. Opening the file directly from your phone\'s storage won\'t allow the camera. Host it on an https site (like GitHub Pages or Netlify) and open that link in Chrome.';
+    return;
+  }
+  if (!navigator.xr) {
+    startBtn.textContent = 'AR not available';
+    msg.textContent = 'This browser doesn\'t support WebXR. Open this page in Chrome on an Android phone.';
+    return;
+  }
+  try {
+    const ok = await navigator.xr.isSessionSupported('immersive-ar');
+    if (ok) { startBtn.disabled = false; startBtn.textContent = 'Start AR'; }
+    else {
+      startBtn.textContent = 'AR not supported';
+      msg.textContent = 'Your phone or browser doesn\'t support AR here. Make sure "Google Play Services for AR" is installed and up to date, and use Chrome.';
+    }
+  } catch (e) {
+    startBtn.textContent = 'AR not available';
+    msg.textContent = 'Couldn\'t check for AR support: ' + e.message;
+  }
+}
+checkSupport();
+
+startBtn.onclick = async () => {
+  initAudio();
+  try {
+    const session = await navigator.xr.requestSession('immersive-ar', {
+      requiredFeatures: ['hit-test'],
+      optionalFeatures: ['dom-overlay'],
+      domOverlay: { root: $('ui') },
+    });
+    renderer.xr.setReferenceSpaceType('local');
+    await renderer.xr.setSession(session);
+    const viewer = await session.requestReferenceSpace('viewer');
+    hitSource = await session.requestHitTestSource({ space: viewer });
+    xrActive = true;
+    $('start').style.display = 'none';
+    $('hud').style.display = 'block';
+    showHint('Point at the floor or a table and move your phone slowly');
+    if (!session.domOverlayState) {
+      // No overlay support: fall back to tap-to-place only.
+      session.addEventListener('select', () => placeAtReticle());
+    }
+    session.addEventListener('end', () => {
+      xrActive = false; hitSource = null; haveCam = false; held = null; reticle.visible = false;
+      $('start').style.display = 'flex'; $('hud').style.display = 'none';
+    });
+  } catch (e) {
+    msg.textContent = 'Couldn\'t start AR: ' + e.message;
+  }
+};
+
+/* ---------------- Main loop ---------------- */
+let lastT = 0, surfaceSeen = false;
+const tmpM = new T.Matrix4();
+renderer.setAnimationLoop((t, frame) => {
+  const dt = lastT ? Math.min(0.05, Math.max(1 / 120, (t - lastT) / 1000)) : 1 / 60;
+  lastT = t;
+  if (frame && xrActive) {
+    const ref = renderer.xr.getReferenceSpace();
+    const vp = frame.getViewerPose(ref);
+    if (vp && vp.views.length) {
+      const view = vp.views[0];
+      tmpM.fromArray(view.transform.matrix);
+      const sc = new T.Vector3();
+      tmpM.decompose(camPos, camQuat, sc);
+      projInv.fromArray(view.projectionMatrix).invert();
+      haveCam = true;
+    }
+    if (hitSource) {
+      const hits = frame.getHitTestResults(hitSource);
+      let shown = false;
+      if (hits.length) {
+        const pose = hits[0].getPose(ref);
+        if (pose) {
+          tmpM.fromArray(pose.transform.matrix);
+          const up = tmpM.elements[5];
+          if (up > 0.85) {
+            reticle.matrix.copy(tmpM);
+            shown = true;
+            const y = tmpM.elements[13];
+            if (floorY === null || y < floorY - 0.03) setFloor(y);
+          }
+        }
+      }
+      reticle.visible = shown && !held;
+      if (performance.now() > hintLock) {
+        if (shown && !surfaceSeen) { surfaceSeen = true; }
+        $('hint').textContent = held ? 'Let go to drop, flick to throw'
+          : trashMode ? 'Trash mode: tap items to remove them'
+          : shown ? `Tap to place ${ITEMS[selected].emoji}  •  hold an item to grab it`
+          : 'Point at the floor or a table and move your phone slowly';
+      }
+    }
+    ring.rotation.y += dt * 1.5;
+
+    // Light follows you so shadows land near what you're looking at
+    if (floorY !== null) {
+      sun.position.set(camPos.x + 0.8, floorY + 3, camPos.z + 0.5);
+      sun.target.position.set(camPos.x, floorY, camPos.z);
+    }
+  }
+
+  // Physics
+  updateHeld(dt, performance.now());
+  world.step(1 / 60, dt, 4);
+  snapHeld();
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i], b = it.body;
+    it.mesh.position.set(b.position.x, b.position.y, b.position.z);
+    it.mesh.quaternion.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+    if (floorY !== null && b.position.y < floorY - 3) removeItem(it);
+  }
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    p.life -= dt; p.v.y -= 9.8 * dt;
+    p.m.position.addScaledVector(p.v, dt);
+    if (floorY !== null && p.m.position.y < floorY) { p.m.position.y = floorY; p.v.multiplyScalar(0.3); }
+    p.m.rotation.x += dt * 8;
+    if (p.life <= 0) { scene.remove(p.m); p.m.material.dispose(); parts.splice(i, 1); }
+  }
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

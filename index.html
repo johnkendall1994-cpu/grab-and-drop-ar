@@ -203,15 +203,19 @@ depthTex0.unpackAlignment = 1; depthTex0.needsUpdate = true;
 const occU = {
   uDepthTex: { value: depthTex0 }, uDepthMat: { value: new T.Matrix4() },
   uRaw: { value: 0.001 }, uOcc: { value: 0 }, uRes: { value: new T.Vector2(1, 1) },
+  uHandMask: { value: depthTex0 }, uHandOn: { value: 0 }, uHandDepth: { value: 0 },
 };
 function patch(m) {
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, occU);
     sh.fragmentShader = sh.fragmentShader.replace('void main() {', `
 uniform sampler2D uDepthTex; uniform mat4 uDepthMat; uniform float uRaw; uniform float uOcc; uniform vec2 uRes;
+uniform sampler2D uHandMask; uniform float uHandOn; uniform float uHandDepth;
 void main() {
-  if (uOcc > 0.5) {
-    vec2 sc = gl_FragCoord.xy / uRes;
+  vec2 sc = gl_FragCoord.xy / uRes;
+  float hm = 0.0;
+  if (uHandOn > 0.5) { hm = texture2D(uHandMask, sc).r; if (hm > 0.5 && vViewPosition.z > uHandDepth) discard; }
+  if (uOcc > 0.5 && hm < 0.02) {
     vec2 duv = (uDepthMat * vec4(sc.x, 1.0 - sc.y, 0.0, 1.0)).xy;
     vec2 rg = texture2D(uDepthTex, duv).rg;
     float realD = (rg.x * 255.0 + rg.y * 65280.0) * uRaw;
@@ -522,10 +526,6 @@ const M = {
   dominoSide: () => MAT('domS', { color: 0xf3eee0, roughness: 0.3, clearcoat: 0.6 }),
   liquid: () => MAT('liquid', { color: 0xffffff, vertexColors: false, roughness: 0.05, clearcoat: 1, transparent: true, opacity: 0.92 }),
 };
-function liquidMat(color) {
-  const m = patch(new T.MeshPhysicalMaterial({ color, roughness: 0.04, clearcoat: 1, transparent: true, opacity: 0.9 }));
-  return m;
-}
 
 /* ============================== Geometry helpers ============================== */
 function mesh(geo, mat, x = 0, y = 0, z = 0) { const m = new T.Mesh(geo, mat); m.position.set(x, y, z); return m; }
@@ -785,7 +785,7 @@ SPECS.jelly = base({ label: 'Jelly', emoji: '🍮', kind: 'food', mass: 0.3, res
   cut: () => [0, Math.PI].map(p0 => rawPiece('Jelly half', SPECS.jelly, s => jellyRaw(s, p0, Math.PI, true), 0.5)),
 });
 SPECS.soda = base({ label: 'Soda', emoji: '🥤', kind: 'drink', mass: 0.38, rest: 0.1, fric: 0.5, sound: 'can',
-  container: { r: 0.03, h: 0.12, bottom: -0.055, cap: 260, start: 1, color: 0x3a1608, sealed: true, rim: 0.02 },
+  container: { r: 0.03, h: 0.12, bottom: -0.055, cap: 260, start: 1, liquid: 'cola', sealed: true, rim: 0.02 },
   build: s => {
     const g = new T.Group(), R = 0.033 * s, H = 0.122 * s;
     g.add(mesh(new T.CylinderGeometry(R, R, H * 0.86, 40, 1, true), M.canLabel()));
@@ -800,7 +800,7 @@ SPECS.soda = base({ label: 'Soda', emoji: '🥤', kind: 'drink', mass: 0.38, res
   },
 });
 SPECS.glass = base({ label: 'Glass', emoji: '🥛', kind: 'object', mass: 0.22, rest: 0.15, fric: 0.5, sound: 'glass', breakable: 3.2,
-  container: { r: 0.029, h: 0.11, bottom: -0.054, cap: 230, start: 0, color: 0xffffff, rim: 0.034 },
+  container: { r: 0.029, h: 0.11, bottom: -0.054, cap: 230, start: 0, rim: 0.034 },
   build: s => {
     const g = new T.Group();
     const pts = [[0, 0], [0.03, 0], [0.036, 0.12], [0.0345, 0.12], [0.0285, 0.007], [0, 0.007]].map(p => new T.Vector2(p[0] * s, (p[1] - 0.06) * s));
@@ -813,6 +813,23 @@ SPECS.glass = base({ label: 'Glass', emoji: '🥛', kind: 'object', mass: 0.22, 
     return { g, shapes, r: 0.065 * s };
   },
 });
+SPECS.jug = base({ label: 'Jug', emoji: '🫗', kind: 'object', mass: 0.9, rest: 0.12, fric: 0.5, sound: 'glass',
+  container: { r: 0.05, h: 0.17, bottom: -0.094, cap: 600, start: 0.85, liquid: 'water', rim: 0.056, endless: true },
+  build: s => {
+    const g = new T.Group();
+    const prof = [[0, 0], [0.05, 0], [0.056, 0.02], [0.058, 0.15], [0.052, 0.19], [0.056, 0.2], [0.0545, 0.2], [0.05, 0.19], [0.0565, 0.15], [0.0545, 0.021], [0.048, 0.006], [0, 0.006]]
+      .map(([x, y]) => new T.Vector2(x * s, (y - 0.1) * s));
+    const body = new T.Mesh(new T.LatheGeometry(prof, 44), M.glass()); body.renderOrder = 2; g.add(body);
+    const handle = new T.Mesh(new T.TorusGeometry(0.045 * s, 0.0075 * s, 10, 24, Math.PI), M.glass());
+    handle.rotation.z = Math.PI / 2; handle.position.set(-0.056 * s, 0.01 * s, 0); handle.renderOrder = 2; g.add(handle);
+    const lip = new T.Mesh(new T.ConeGeometry(0.014 * s, 0.022 * s, 12, 1, true, -Math.PI / 2, Math.PI), M.glass());
+    lip.rotation.z = -Math.PI / 2 - 0.5; lip.position.set(0.058 * s, 0.098 * s, 0); g.add(lip);
+    const shapes = [cylS(0.052 * s, 0.052 * s, 0.01 * s, [0, -0.095 * s, 0])];
+    for (let i = 0; i < 10; i++) { const a = i / 10 * Math.PI * 2; shapes.push(boxS(0.019 * s, 0.098 * s, 0.003 * s, [Math.sin(a) * 0.058 * s, 0.003 * s, Math.cos(a) * 0.058 * s], qY(a))); }
+    shapes.push(boxS(0.012 * s, 0.045 * s, 0.006 * s, [-0.1 * s, 0.01 * s, 0]));
+    return { g, shapes, r: 0.11 * s };
+  },
+});
 SPECS.plate = base({ label: 'Plate', emoji: '🍽️', kind: 'object', mass: 0.45, rest: 0.18, fric: 0.6, sound: 'ceramic', breakable: 3.6,
   build: s => {
     const g = new T.Group();
@@ -823,7 +840,7 @@ SPECS.plate = base({ label: 'Plate', emoji: '🍽️', kind: 'object', mass: 0.4
   },
 });
 SPECS.bowl = base({ label: 'Bowl', emoji: '🥣', kind: 'object', mass: 0.35, rest: 0.18, fric: 0.6, sound: 'ceramic', breakable: 3.8,
-  container: { r: 0.06, h: 0.048, bottom: -0.019, cap: 420, start: 0, color: 0xffffff, rim: 0.077, bowl: true },
+  container: { r: 0.06, h: 0.048, bottom: -0.019, cap: 420, start: 0, rim: 0.077, bowl: true },
   build: s => {
     const g = new T.Group();
     const outer = [[0, 0], [0.04, 0], [0.05, 0.005], [0.07, 0.03], [0.08, 0.06]].map(([x, y]) => new T.Vector2(x * s, (y - 0.03) * s));
@@ -899,7 +916,7 @@ SPECS.dominoes = { label: 'Dominoes', emoji: '🁫', kind: 'set', place: (p, fwd
   }
   showHint('Tap the first domino to start the chain', 2500);
 } };
-const MENU = ['pizza', 'burger', 'donut', 'apple', 'orange', 'banana', 'watermelon', 'cake', 'pancakes', 'jelly', 'soda', 'glass', 'plate', 'bowl', 'ball', 'bowling', 'pins', 'jenga', 'dominoes'];
+const MENU = ['pizza', 'burger', 'donut', 'apple', 'orange', 'banana', 'watermelon', 'cake', 'pancakes', 'jelly', 'soda', 'jug', 'glass', 'plate', 'bowl', 'ball', 'bowling', 'pins', 'jenga', 'dominoes'];
 
 // Piece helpers ---------------------------------------------------------
 function centered(raw, shapeFn) {
@@ -1026,6 +1043,7 @@ const sfx = {
   psst: () => { noise(0.4, 0.4, 4000, 1, 'highpass', 0, 2500); tone(1500, 900, 0.05, 0.1, 'square'); },
   shatter: () => { for (let i = 0; i < 6; i++) tone(2500 + Math.random() * 3000, 1800 + Math.random() * 1000, 0.25 + Math.random() * 0.3, 0.07, 'sine', i * 0.025); noise(0.35, 0.4, 5000, 1, 'highpass'); },
   splash: () => noise(0.12, 0.08, 1800, 1, 'bandpass'),
+  sizzle: () => { noise(0.5, 0.12, 5000, 0.7, 'highpass', 0, 3000); noise(0.3, 0.06, 2500, 4, 'bandpass'); },
 };
 let pourGain = null;
 function setPourSound(on) {
@@ -1061,10 +1079,12 @@ function spawnSpec(spec, scale, pos, quat, built) {
   g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   const it = { spec, scale, body, mesh: outer, inner, r, bites: 0, wob: 0, wobT: 0, born: performance.now(), lastSound: 0, opened: true, fill: 0 };
   outer.userData.item = it;
+  itemByBody.set(body.id, it);
   if (spec.container) {
-    const ct = spec.container; it.fill = ct.start; it.opened = !ct.sealed; it.liquidColor = new T.Color(ct.color);
+    const ct = spec.container; it.fill = ct.start; it.opened = !ct.sealed; it.liquidKey = ct.liquid || null;
+    it.liquidColor = new T.Color(ct.liquid ? LIQ[ct.liquid].color : 0xffffff);
     if (!ct.sealed) {
-      const lm = liquidMat(it.liquidColor);
+      const lm = liquidMat(ct.liquid || 'water');
       if (ct.bowl) { it.liquid = new T.Mesh(new T.CircleGeometry(1, 40).rotateX(-Math.PI / 2), lm); }
       else { it.liquid = new T.Mesh(new T.CylinderGeometry(ct.r * scale, ct.r * scale * 0.93, 1, 32), lm); }
       it.liquid.renderOrder = 1; inner.add(it.liquid); updateLiquid(it);
@@ -1079,7 +1099,9 @@ function updateLiquid(it) {
   if (!it.liquid) return;
   const ct = it.spec.container, s = it.scale;
   it.liquid.visible = it.fill > 0.01;
-  it.liquid.material.color.copy(it.liquidColor);
+  const L = LIQ[it.liquidKey] || LIQ.water, lm = it.liquid.material;
+  lm.color.copy(it.liquidColor); lm.opacity = Math.max(0.55, L.opacity); lm.transparent = lm.opacity < 1;
+  lm.emissive.set(L.emissive || 0x000000); lm.emissiveIntensity = L.ei || 0;
   if (ct.bowl) {
     const h = it.fill * ct.h, rr = h < 0.022 ? lerp(0.045, 0.064, h / 0.022) : lerp(0.064, 0.074, (h - 0.022) / 0.027);
     it.liquid.position.y = (ct.bottom + h) * s; it.liquid.scale.set(rr * s, 1, rr * s);
@@ -1103,6 +1125,7 @@ function removeItem(it, poof = false) {
   const i = items.indexOf(it); if (i < 0) return;
   items.splice(i, 1);
   if (held && held.item === it) held = null;
+  itemByBody.delete(it.body.id);
   world.removeBody(it.body); scene.remove(it.mesh);
   if (poof) burst(it.body.position, 0xffffff, 14, it.r);
 }
@@ -1121,34 +1144,110 @@ function burst(p, color, n, r) {
 }
 const CRUMB = { pizza: 0xd9a35b, burger: 0xd99a4e, donut: 0xd4924a, apple: 0xfff4d6, orange: 0xff8c1a, banana: 0xfff1a8, watermelon: 0xe63946, cake: 0xfff1e6, pancakes: 0xe0a458, jelly: 0xff2a4a };
 
-/* Liquid particles + puddles */
-const LMAX = 700;
-const lGeo = new T.SphereGeometry(0.0042, 6, 4);
-const lMesh = new T.InstancedMesh(lGeo, MAT('drops', { color: 0xffffff, roughness: 0.05, clearcoat: 1 }), LMAX);
-lMesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
-lMesh.count = 0; lMesh.frustumCulled = false; scene.add(lMesh);
-const drops = [];
-const puddles = [];
-function emitDrop(p, v, color, src) {
-  if (drops.length >= LMAX) return;
-  drops.push({ p: p.clone(), v: v.clone(), c: new T.Color(color), life: 3, src });
+/* Liquids: drops, puddles that flow over the room scan, steam and fizz */
+const LIQ = {
+  water:  { name: 'Water', emoji: '💧', color: 0x8ec9f2, opacity: 0.5, visc: 1, size: 1 },
+  juice:  { name: 'Orange juice', emoji: '🧃', color: 0xff9612, opacity: 0.9, visc: 1.1, size: 1 },
+  milk:   { name: 'Milk', emoji: '🥛', color: 0xf5f4ee, opacity: 0.97, visc: 1.2, size: 1 },
+  cola:   { name: 'Cola', emoji: '🥤', color: 0x3a1608, opacity: 0.93, visc: 1, size: 1, fizz: true },
+  coffee: { name: 'Coffee', emoji: '☕', color: 0x4a2a14, opacity: 0.95, visc: 1, size: 1, steam: 0.8 },
+  honey:  { name: 'Honey', emoji: '🍯', color: 0xd88a0e, opacity: 0.88, visc: 5, size: 1.5, emissive: 0x2a1400, ei: 0.4 },
+  choco:  { name: 'Chocolate', emoji: '🍫', color: 0x3b1c0c, opacity: 1, visc: 4, size: 1.5 },
+  slime:  { name: 'Slime', emoji: '🟢', color: 0x6dff2e, opacity: 0.86, visc: 3, size: 1.4, emissive: 0x2fae00, ei: 0.9 },
+  lava:   { name: 'Lava', emoji: '🌋', color: 0xff5a00, opacity: 1, visc: 4, size: 1.5, emissive: 0xff3a00, ei: 2.2, steam: 3, hot: true },
+  foam:   { name: 'Foam', emoji: '🫧', color: 0xe9dfcf, opacity: 0.9, visc: 1, size: 0.7, noPuddle: true },
+};
+const LIQ_ORDER = ['water', 'juice', 'milk', 'cola', 'coffee', 'honey', 'choco', 'slime', 'lava'];
+const dropArea = key => 0.00011 / Math.pow(LIQ[key].visc, 0.3);
+function liquidMat(key) {
+  const L = LIQ[key] || LIQ.water;
+  return patch(new T.MeshPhysicalMaterial({ color: L.color, roughness: key === 'choco' ? 0.12 : 0.03, clearcoat: 1, clearcoatRoughness: 0.05,
+    transparent: L.opacity < 1, opacity: L.opacity, emissive: L.emissive || 0x000000, emissiveIntensity: L.ei || 0 }));
 }
+const LMAX = 260;
+const lGeo = new T.SphereGeometry(0.0042, 7, 5);
+const dropMeshes = {};
+function dropMesh(key) {
+  if (dropMeshes[key]) return dropMeshes[key];
+  const m = new T.InstancedMesh(lGeo, liquidMat(key), LMAX);
+  m.instanceMatrix.setUsage(T.DynamicDrawUsage); m.count = 0; m.frustumCulled = false; m.castShadow = false;
+  scene.add(m); return (dropMeshes[key] = m);
+}
+const drops = [];
+function emitDrop(p, v, key, src) {
+  if (drops.length >= 900) return;
+  key = LIQ[key] ? key : 'water';
+  drops.push({ p: p.clone(), v: v.clone(), key, life: 4, src, splash: false, stuck: null, bounces: 0 });
+}
+let lastSplash = 0, lastSizzle = 0;
 function updateDrops(dt) {
-  const m4 = new T.Matrix4(), q = new T.Quaternion(), sc = new T.Vector3();
-  const lp = new T.Vector3(), invQ = new T.Quaternion();
+  const lp = new T.Vector3(), invQ = new T.Quaternion(), n = new T.Vector3();
+  const tray = handTray.active ? handTray : null;
+  let pooled = 0;
   for (let i = drops.length - 1; i >= 0; i--) {
-    const d = drops[i];
+    const d = drops[i], L = LIQ[d.key];
+    // Drops resting in your palm
+    if (d.stuck) {
+      if (!tray) { d.stuck = null; d.v.set(0, -0.2, 0); continue; }
+      pooled++;
+      const gl = new T.Vector3(0, -9.8, 0).applyQuaternion(tray.invQ);
+      const tilt = 1 - tray.n.y;
+      d.stuck.x += gl.x * dt * 0.012 * (0.3 + tilt * 3) / L.visc;
+      d.stuck.z += gl.z * dt * 0.012 * (0.3 + tilt * 3) / L.visc;
+      d.p.copy(d.stuck).applyQuaternion(tray.q).add(tray.pos);
+      d.life -= dt;
+      if (Math.abs(d.stuck.x) > tray.hx || Math.abs(d.stuck.z) > tray.hz || d.life <= 0) {
+        const slide = new T.Vector3(gl.x, 0, gl.z).applyQuaternion(tray.q).multiplyScalar(0.03);
+        d.v.copy(tray.vel).add(slide); d.stuck = null; d.life = 3;
+      }
+      continue;
+    }
     d.v.y -= 9.8 * dt; d.p.addScaledVector(d.v, dt); d.life -= dt;
     let dead = d.life <= 0;
     if (!dead && !d.splash) {
+      // Hand: palm tray catches and pools, fingertips deflect
+      if (tray && d.v.y < 0.2) {
+        lp.copy(d.p).sub(tray.pos).applyQuaternion(tray.invQ);
+        if (Math.abs(lp.x) < tray.hx && Math.abs(lp.z) < tray.hz && lp.y < 0.014 && lp.y > -0.025) {
+          if (pooled < 80) { d.stuck = new T.Vector3(lp.x, 0.008, lp.z); d.life = 0.8 + L.visc * 0.6; pooled++; continue; }
+          d.v.reflect(tray.n).multiplyScalar(0.25).add(tray.vel); d.bounces++;
+        }
+      }
+      if (handTips.active) for (const tp of handTips.pts) {
+        const dx = d.p.x - tp.p.x, dy = d.p.y - tp.p.y, dz = d.p.z - tp.p.z, dd = dx * dx + dy * dy + dz * dz;
+        if (dd < 0.00018) {
+          n.set(dx, dy, dz).normalize();
+          const vn = d.v.dot(n); if (vn < 0) d.v.addScaledVector(n, -1.4 * vn);
+          d.v.multiplyScalar(0.45).addScaledVector(tp.v, 0.6);
+          d.p.copy(tp.p).addScaledVector(n, 0.0135); d.bounces++;
+        }
+      }
+      // Containers fill up
       for (const it of items) {
-        const ct = it.spec.container; if (!ct || !it.liquid || it === d.src) continue;
+        const ct = it.spec.container; if (!ct || !it.liquid || it === d.src || ct.endless) continue;
         const b = it.body; invQ.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w).invert();
         lp.set(d.p.x - b.position.x, d.p.y - b.position.y, d.p.z - b.position.z).applyQuaternion(invQ).divideScalar(it.scale);
         if (lp.y > ct.bottom && lp.y < ct.bottom + ct.h + 0.012 && Math.hypot(lp.x, lp.z) < ct.r * 1.05 && d.v.y < 0) {
           const cap = ct.cap * it.scale ** 3;
-          if (it.fill < 1) { it.liquidColor.lerp(d.c, 1 / Math.max(1, it.fill * cap + 1)); it.fill = Math.min(1, it.fill + 1 / cap); updateLiquid(it); }
+          if (it.fill < 1) {
+            it.liquidColor.lerp(new T.Color(L.color), 1 / Math.max(1, it.fill * cap + 1));
+            if (it.fill < 0.02 || !it.liquidKey) it.liquidKey = d.key;
+            it.fill = Math.min(1, it.fill + 1 / cap); updateLiquid(it);
+          }
           dead = true; break;
+        }
+      }
+      // Splash off food and objects
+      if (!dead && d.bounces < 3) for (const it of items) {
+        if (it === d.src || it.spec.container) continue;
+        const b = it.body.position, rr = it.r * 0.85;
+        const dx = d.p.x - b.x, dy = d.p.y - b.y, dz = d.p.z - b.z;
+        if (dx * dx + dy * dy + dz * dz < rr * rr) {
+          n.set(dx, dy, dz).normalize();
+          const vn = d.v.dot(n); if (vn < 0) d.v.addScaledVector(n, -1.3 * vn);
+          d.v.multiplyScalar(0.35); d.p.set(b.x, b.y, b.z).addScaledVector(n, rr + 0.002); d.bounces++;
+          if (L.hot && performance.now() - lastSizzle > 150) { lastSizzle = performance.now(); sfx.sizzle(); }
+          break;
         }
       }
     }
@@ -1156,58 +1255,178 @@ function updateDrops(dt) {
       const sy = surfaceY(d.p.x, d.p.z, d.p.y + 0.05);
       if (d.p.y < sy) {
         dead = true;
-        if (!d.splash) { addPuddle(d.p.x, sy, d.p.z, d.c); if (Math.random() < 0.35) { for (let k = 0; k < 2; k++) drops.push({ p: new T.Vector3(d.p.x, sy + 0.002, d.p.z), v: new T.Vector3((Math.random() - 0.5) * 0.5, 0.4 + Math.random() * 0.4, (Math.random() - 0.5) * 0.5), c: d.c, life: 0.4, splash: true }); } }
+        if (!d.splash) {
+          if (!L.noPuddle) addPuddle(d.p.x, sy, d.p.z, d.key, dropArea(d.key));
+          const ns = L.visc > 2 ? 0 : (Math.random() < 0.4 ? 2 : 0);
+          for (let k = 0; k < ns; k++) drops.push({ p: new T.Vector3(d.p.x, sy + 0.002, d.p.z), v: new T.Vector3((Math.random() - 0.5) * 0.5, 0.35 + Math.random() * 0.4, (Math.random() - 0.5) * 0.5), key: d.key, life: 0.4, splash: true, stuck: null, bounces: 0 });
+        }
       }
     }
     if (dead) drops.splice(i, 1);
   }
-  lMesh.count = drops.length;
-  for (let i = 0; i < drops.length; i++) {
-    const d = drops[i]; const s = d.splash ? 0.5 : 1;
-    sc.set(s, s * (1 + Math.min(2, d.v.length() * 0.4)), s);
-    q.setFromUnitVectors(Y, d.v.lengthSq() > 1e-6 ? d.v.clone().normalize() : Y);
-    m4.compose(d.p, q, sc); lMesh.setMatrixAt(i, m4); lMesh.setColorAt(i, d.c);
+  // Draw drops grouped by liquid
+  const m4 = new T.Matrix4(), q = new T.Quaternion(), sc = new T.Vector3(), vn = new T.Vector3();
+  for (const k in dropMeshes) dropMeshes[k].count = 0;
+  for (const d of drops) {
+    const dm = dropMesh(d.key); if (dm.count >= LMAX) continue;
+    const L = LIQ[d.key], s = (d.splash ? 0.5 : 1) * L.size, sp = d.stuck ? 0 : d.v.length();
+    sc.set(s, s * (1 + Math.min(2.5, sp * 0.45 * (L.visc > 2 ? 1.8 : 1))), s);
+    if (d.stuck) sc.set(s * 1.4, s * 0.5, s * 1.4);
+    q.setFromUnitVectors(Y, sp > 1e-3 ? vn.copy(d.v).divideScalar(sp) : Y);
+    m4.compose(d.p, q, sc); dm.setMatrixAt(dm.count++, m4);
   }
-  lMesh.instanceMatrix.needsUpdate = true;
-  if (lMesh.instanceColor) lMesh.instanceColor.needsUpdate = true;
-  for (let i = puddles.length - 1; i >= 0; i--) {
-    const p = puddles[i]; p.age += dt;
-    p.m.scale.x = p.m.scale.z = lerp(p.m.scale.x, p.r, 0.1);
-    if (p.age > 35) { p.m.material.opacity -= dt * 0.3; if (p.m.material.opacity <= 0) { scene.remove(p.m); puddles.splice(i, 1); } }
-  }
+  for (const k in dropMeshes) dropMeshes[k].instanceMatrix.needsUpdate = true;
 }
-let lastSplash = 0;
-function addPuddle(x, y, z, color) {
-  const now = performance.now(); if (now - lastSplash > 70) { sfx.splash(); lastSplash = now; }
-  for (const p of puddles) if (Math.abs(p.y - y) < 0.02 && Math.hypot(p.x - x, p.z - z) < p.r + 0.02) {
-    p.r = Math.min(0.3, Math.sqrt(p.r * p.r + 0.00012)); p.age = 0; p.m.material.color.lerp(color, 0.05); return;
+
+/* Puddles: stay until cleared, merge, run downhill on the room scan and drip off edges */
+const puddles = [];
+const puddleMats = {};
+function puddleMat(key) { if (!puddleMats[key]) { const m = liquidMat(key); m.depthWrite = false; m.transparent = true; m.opacity = Math.min(LIQ[key].opacity, 0.92); puddleMats[key] = m; } return puddleMats[key]; }
+function blobGeo(seed) {
+  const g = new T.CircleGeometry(1, 40); g.rotateX(-Math.PI / 2);
+  const p = g.attributes.position;
+  for (let i = 1; i < p.count; i++) {
+    const x = p.getX(i), z = p.getZ(i), a = Math.atan2(z, x);
+    const k = 1 + 0.13 * Math.sin(a * 3 + seed) + 0.08 * Math.sin(a * 5 + seed * 2.3) + 0.05 * Math.sin(a * 9 + seed * 0.7);
+    p.setX(i, x * k); p.setZ(i, z * k);
   }
-  if (puddles.length > 24) { const old = puddles.shift(); scene.remove(old.m); }
-  const m = new T.Mesh(new T.CircleGeometry(1, 28).rotateX(-Math.PI / 2), patch(new T.MeshPhysicalMaterial({ color, roughness: 0.03, clearcoat: 1, transparent: true, opacity: 0.75, depthWrite: false })));
-  m.position.set(x, y + 0.0015 + puddles.length * 0.0001, z); m.scale.set(0.01, 1, 0.01); m.renderOrder = 1;
-  scene.add(m); puddles.push({ m, x, y, z, r: 0.015, age: 0 });
+  return g;
+}
+function addPuddle(x, y, z, key, area) {
+  const now = performance.now();
+  if (now - lastSplash > 80) { lastSplash = now; LIQ[key].visc > 2 ? SOUNDS.soft(0.15) : sfx.splash(); }
+  if (LIQ[key].hot && now - lastSizzle > 200) { lastSizzle = now; sfx.sizzle(); }
+  for (const p of puddles) {
+    if (p.key === key && Math.abs(p.y - y) < 0.03 && Math.hypot(p.x - x, p.z - z) < p.r + 0.02) {
+      const a0 = p.area; p.area += area; const w = area / p.area;
+      p.x = lerp(p.x, x, w * 0.3); p.z = lerp(p.z, z, w * 0.3); p.grew = now;
+      return;
+    }
+  }
+  if (puddles.length >= 70) { // merge into the nearest puddle instead of piling up meshes
+    let best = null, bd = Infinity; for (const p of puddles) { const dd = Math.hypot(p.x - x, p.z - z); if (dd < bd) { bd = dd; best = p; } }
+    if (best) { best.area += area; return; }
+  }
+  const m = new T.Mesh(blobGeo(Math.random() * 10), puddleMat(key));
+  m.receiveShadow = true; m.renderOrder = 1; m.scale.set(0.005, 1, 0.005);
+  m.position.set(x, y + 0.0015, z);
+  scene.add(m);
+  puddles.push({ m, x, y, z, key, area, r: Math.sqrt(area / Math.PI), vx: 0, vz: 0, grew: now, drip: 0 });
+}
+function removePuddle(i) { scene.remove(puddles[i].m); puddles.splice(i, 1); }
+let lastMerge = 0;
+const lavaLight = new T.PointLight(0xff5a1a, 0, 1.2, 2); scene.add(lavaLight);
+function updatePuddles(dt, now) {
+  let lavaBest = null;
+  for (let i = puddles.length - 1; i >= 0; i--) {
+    const p = puddles[i], L = LIQ[p.key];
+    p.r = Math.sqrt(p.area / Math.PI);
+    // Flow downhill on real shapes
+    const e = 0.04, top = p.y + 0.06;
+    const gx = (surfaceY(p.x + e, p.z, top) - surfaceY(p.x - e, p.z, top)) / (2 * e);
+    const gz = (surfaceY(p.x, p.z + e, top) - surfaceY(p.x, p.z - e, top)) / (2 * e);
+    const slope = Math.hypot(gx, gz);
+    if (slope > 0.06 && slope < 6) { p.vx -= gx * 2.2 / L.visc * dt; p.vz -= gz * 2.2 / L.visc * dt; }
+    p.vx *= Math.pow(0.12, dt); p.vz *= Math.pow(0.12, dt);
+    const sp = Math.hypot(p.vx, p.vz);
+    if (sp > 0.25) { p.vx *= 0.25 / sp; p.vz *= 0.25 / sp; }
+    p.x += p.vx * dt; p.z += p.vz * dt;
+    const ny = surfaceY(p.x, p.z, p.y + 0.06);
+    if (ny > -Infinity) {
+      if (ny < p.y - 0.05) { // ran off an edge: becomes falling drops
+        const cnt = Math.min(20, Math.ceil(p.area / dropArea(p.key)));
+        for (let k = 0; k < cnt; k++) emitDrop(new T.Vector3(p.x, p.y + 0.004, p.z), new T.Vector3(p.vx + (Math.random() - 0.5) * 0.1, 0, p.vz + (Math.random() - 0.5) * 0.1), p.key, null);
+        p.area -= cnt * dropArea(p.key);
+      } else p.y = lerp(p.y, ny, 0.3);
+    }
+    // Drip off edges the puddle reaches
+    const dirx = sp > 0.01 ? p.vx / sp : 0, dirz = sp > 0.01 ? p.vz / sp : 0;
+    if (sp > 0.01) {
+      const ax = p.x + dirx * p.r, az = p.z + dirz * p.r, ay = surfaceY(ax, az, p.y + 0.05);
+      if (ay < p.y - 0.04) {
+        p.drip += dt * 25 * Math.min(1, p.r / 0.04) / L.visc;
+        while (p.drip >= 1 && p.area > dropArea(p.key) * 2) { p.drip--; p.area -= dropArea(p.key); emitDrop(new T.Vector3(ax, p.y + 0.003, az), new T.Vector3(dirx * 0.15, 0, dirz * 0.15), p.key, null); }
+      }
+    }
+    if (p.area < dropArea(p.key) * 0.5) { removePuddle(i); continue; }
+    p.m.position.set(p.x, p.y + 0.0015 + (i % 7) * 0.0002, p.z);
+    const s = lerp(p.m.scale.x, p.r, 0.12); p.m.scale.set(s, 1, s);
+    // Steam, fizz and glow
+    if (L.steam && Math.random() < L.steam * dt * Math.min(2, p.r / 0.03)) puff(p.x + (Math.random() - 0.5) * p.r, p.y + 0.005, p.z + (Math.random() - 0.5) * p.r, 'steam');
+    if (L.fizz && now - p.grew < 3000 && Math.random() < 8 * dt) puff(p.x + (Math.random() - 0.5) * p.r, p.y + 0.002, p.z + (Math.random() - 0.5) * p.r, 'fizz');
+    if (L.hot && (!lavaBest || p.r > lavaBest.r)) lavaBest = p;
+    // Your hand splashes puddles
+    if (hand.enabled && hand.lm && handTips.active) {
+      for (const tp of handTips.pts) {
+        if (Math.hypot(tp.p.x - p.x, tp.p.z - p.z) < p.r && Math.abs(tp.p.y - p.y) < 0.03 && tp.v.length() > 0.3 && Math.random() < 0.6) {
+          for (let k = 0; k < 2; k++) emitDrop(new T.Vector3(tp.p.x, p.y + 0.005, tp.p.z), new T.Vector3(tp.v.x * 0.6 + (Math.random() - 0.5) * 0.3, 0.5 + Math.random() * 0.5, tp.v.z * 0.6 + (Math.random() - 0.5) * 0.3), p.key, null);
+          p.area = Math.max(0, p.area - dropArea(p.key) * 1.5);
+          p.vx += tp.v.x * 0.05; p.vz += tp.v.z * 0.05;
+        }
+      }
+    }
+  }
+  if (lavaBest) { lavaLight.position.set(lavaBest.x, lavaBest.y + 0.08, lavaBest.z); lavaLight.intensity = Math.min(3, lavaBest.r * 25) * (0.85 + Math.random() * 0.15); }
+  else lavaLight.intensity = 0;
+  // Merge touching puddles
+  if (now - lastMerge > 400) {
+    lastMerge = now;
+    for (let i = puddles.length - 1; i >= 0; i--) for (let j = i - 1; j >= 0; j--) {
+      const a = puddles[i], b = puddles[j];
+      if (Math.abs(a.y - b.y) < 0.03 && Math.hypot(a.x - b.x, a.z - b.z) < (a.r + b.r) * 0.75) {
+        const big = a.area >= b.area ? a : b, small = big === a ? b : a, tot = a.area + b.area;
+        big.x = (a.x * a.area + b.x * b.area) / tot; big.z = (a.z * a.area + b.z * b.area) / tot; big.area = tot;
+        removePuddle(puddles.indexOf(small)); break;
+      }
+    }
+  }
+  updatePuffs(dt);
+}
+/* Steam and fizz puffs */
+const puffs = [];
+let puffTex = null;
+function puff(x, y, z, kind) {
+  if (puffs.length > 90) return;
+  if (!puffTex) {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 64; const g = cv.getContext('2d');
+    const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 64, 64); puffTex = new T.CanvasTexture(cv);
+  }
+  const sp = new T.Sprite(new T.SpriteMaterial({ map: puffTex, transparent: true, depthWrite: false, opacity: kind === 'steam' ? 0.25 : 0.8, color: kind === 'steam' ? 0xffffff : 0xfff6e8 }));
+  const s = kind === 'steam' ? 0.03 : 0.006; sp.scale.set(s, s, s); sp.position.set(x, y, z);
+  scene.add(sp); puffs.push({ sp, kind, life: kind === 'steam' ? 1.8 : 0.6, max: kind === 'steam' ? 1.8 : 0.6, vy: kind === 'steam' ? 0.12 : 0.08 });
+}
+function updatePuffs(dt) {
+  for (let i = puffs.length - 1; i >= 0; i--) {
+    const p = puffs[i]; p.life -= dt; p.sp.position.y += p.vy * dt;
+    const t = 1 - p.life / p.max;
+    if (p.kind === 'steam') { const s = 0.03 + t * 0.07; p.sp.scale.set(s, s, s); p.sp.material.opacity = 0.25 * (1 - t); p.sp.position.x += (Math.random() - 0.5) * 0.01; }
+    else p.sp.material.opacity = 0.8 * (1 - t);
+    if (p.life <= 0) { scene.remove(p.sp); p.sp.material.dispose(); puffs.splice(i, 1); }
+  }
 }
 function updatePouring(dt) {
   let any = false;
   const up = new T.Vector3(), down = new T.Vector3(0, -1, 0);
   for (const it of items) {
-    const ct = it.spec.container; if (!ct || it.fill <= 0.001 || !it.opened) continue;
+    const ct = it.spec.container; if (!ct || it.fill <= 0.001 || !it.opened || !it.liquidKey) continue;
     const b = it.body; const q = new T.Quaternion(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
     up.copy(Y).applyQuaternion(q);
     const thresh = ct.bowl ? 0.55 : 0.25;
     if (up.y > thresh) continue;
     any = true;
-    const rate = clamp((thresh - up.y) / 0.7, 0.15, 1) * 110 * Math.min(2, it.scale);
+    const L = LIQ[it.liquidKey];
+    const rate = clamp((thresh - up.y) / 0.7, 0.15, 1) * 110 * Math.min(2, it.scale) / Math.sqrt(L.visc);
     it.pourAcc = (it.pourAcc || 0) + rate * dt;
     const perp = down.clone().sub(up.clone().multiplyScalar(up.dot(down))); if (perp.lengthSq() < 1e-6) perp.set(1, 0, 0); perp.normalize();
     const top = new T.Vector3(b.position.x, b.position.y, b.position.z).addScaledVector(up, (ct.bottom + ct.h + 0.004) * it.scale).addScaledVector(perp, ct.rim * it.scale);
     const cap = ct.cap * it.scale ** 3;
     while (it.pourAcc >= 1 && it.fill > 0) {
       it.pourAcc -= 1;
-      const v = new T.Vector3(b.velocity.x, b.velocity.y, b.velocity.z).addScaledVector(perp, 0.35).addScaledVector(up, 0.15);
-      v.x += (Math.random() - 0.5) * 0.06; v.z += (Math.random() - 0.5) * 0.06;
-      emitDrop(top.clone().addScaledVector(perp, Math.random() * 0.003), v, it.liquidColor, it);
-      it.fill = Math.max(0, it.fill - 1 / cap);
+      const v = new T.Vector3(b.velocity.x, b.velocity.y, b.velocity.z).addScaledVector(perp, 0.35 / Math.pow(L.visc, 0.4)).addScaledVector(up, 0.12);
+      v.x += (Math.random() - 0.5) * 0.05; v.z += (Math.random() - 0.5) * 0.05;
+      emitDrop(top.clone().addScaledVector(perp, Math.random() * 0.003), v, it.liquidKey, it);
+      if (!ct.endless) it.fill = Math.max(0, it.fill - 1 / cap);
     }
     updateLiquid(it);
     if (it.spec === SPECS.soda && it.fill <= 0.001) { it.body.mass = 0.02 * it.scale ** 3; it.body.updateMassProperties(); }
@@ -1222,7 +1441,7 @@ function shatter(it) {
   const mat = isGlass ? M.glass() : (it.spec === SPECS.bowl ? M.ceramicBlue() : M.ceramic());
   const pos = new T.Vector3(b.position.x, b.position.y, b.position.z);
   const vel = new T.Vector3(b.velocity.x, b.velocity.y, b.velocity.z);
-  if (it.fill > 0.02 && it.liquidColor) { for (let k = 0; k < Math.round(it.fill * 60); k++) emitDrop(pos, new T.Vector3((Math.random() - 0.5) * 1.2, Math.random() * 0.8, (Math.random() - 0.5) * 1.2), it.liquidColor, null); }
+  if (it.fill > 0.02 && it.liquidKey) { for (let k = 0; k < Math.round(it.fill * 60); k++) emitDrop(pos, new T.Vector3((Math.random() - 0.5) * 1.2, Math.random() * 0.8, (Math.random() - 0.5) * 1.2), it.liquidKey, null); }
   removeItem(it);
   sfx.shatter(); buzz(40);
   const n = 9;
@@ -1278,13 +1497,18 @@ function openCan(it) {
   it.mesh.traverse(o => { if (o.userData.hole) o.visible = true; });
   const b = it.body, up = Y.clone().applyQuaternion(bodyQuat(b));
   const top = bodyPos(b).addScaledVector(up, 0.062 * it.scale);
-  for (let k = 0; k < 14; k++) emitDrop(top, up.clone().multiplyScalar(0.6 + Math.random() * 0.5).add(new T.Vector3((Math.random() - 0.5) * 0.3, 0, (Math.random() - 0.5) * 0.3)), 0xd8c8b0, it);
+  for (let k = 0; k < 14; k++) emitDrop(top, up.clone().multiplyScalar(0.6 + Math.random() * 0.5).add(new T.Vector3((Math.random() - 0.5) * 0.3, 0, (Math.random() - 0.5) * 0.3)), 'foam', it);
   showHint('Opened! Tilt it to pour, or bring it to the camera to drink', 2400);
 }
 function tap(it) {
   const sp = it.spec, b = it.body; b.wakeUp();
   if (sp.edible) { bite(it); return; }
   if (sp === SPECS.soda) { if (!it.opened) openCan(it); else pokeIt(it, 1.0); return; }
+  if (sp === SPECS.jug) {
+    const k = LIQ_ORDER[(LIQ_ORDER.indexOf(it.liquidKey) + 1) % LIQ_ORDER.length];
+    it.liquidKey = k; it.liquidColor.set(LIQ[k].color); updateLiquid(it);
+    sfx.place(); buzz(12); showHint(`${LIQ[k].emoji} ${LIQ[k].name}. Tilt the jug to pour`, 1600); return;
+  }
   if (sp.kind === 'ball') { SOUNDS.bounce(0.7); sfx.boing(); buzz(15); pokeIt(it, 0.6); b.velocity.y += 2.6; return; }
   if (sp === SPECS.domino) { const d = forwardFlat(); b.applyImpulse(new C.Vec3(d.x * 0.02, 0, d.z * 0.02), new C.Vec3(b.position.x, b.position.y + 0.04 * it.scale, b.position.z)); buzz(10); return; }
   pokeIt(it, sp === SPECS.bowling ? 1.6 : 1.1);
@@ -1352,7 +1576,8 @@ function startGrab(it, mode, handPoint) {
   const relQ = camInv.clone().multiply(bodyQuat(b));
   b.type = C.Body.KINEMATIC; b.updateSolveMassProperties && b.updateSolveMassProperties();
   b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0); b.wakeUp();
-  held = { item: it, mode, local, len, baseLen: len, relQ, hist: [], offset: handPoint ? bodyPos(b).sub(handPoint) : null };
+  const hRel = mode === 'hand' ? hand.q.clone().invert().multiply(bodyQuat(b)) : null;
+  held = { item: it, mode, local, len, baseLen: len, relQ, hRel, hist: [], offset: handPoint ? bodyPos(b).sub(handPoint) : null };
   sfx.grab(); buzz(28);
   if (mode === 'phone') showHint(it.spec.edible ? 'Drag down to pull it to your mouth. Let go to drop, flick to throw' : 'Move your phone to carry it. Let go to drop, flick to throw', 2600);
   else showHint('Got it! Open your hand to drop, fling to throw', 2000);
@@ -1380,13 +1605,13 @@ function updateHeld(dt, now) {
   if (held.mode === 'hand') {
     if (!hand.p3) return;
     if (held.offset) held.offset.multiplyScalar(Math.pow(0.02, dt));
-    target = hand.p3.clone().add(held.offset || new T.Vector3());
+    target = hand.anchor.clone().add(held.offset || new T.Vector3());
   } else {
     target = held.local.clone().applyQuaternion(camQuat).add(camPos);
   }
   const sy = surfaceY(target.x, target.z, target.y + 0.5);
   if (sy > -Infinity) target.y = Math.max(target.y, sy + it.r * 0.6);
-  const q = camQuat.clone().multiply(held.relQ);
+  const q = held.mode === 'hand' && held.hRel ? hand.q.clone().multiply(held.hRel) : camQuat.clone().multiply(held.relQ);
   b.velocity.set((target.x - b.position.x) / dt, (target.y - b.position.y) / dt, (target.z - b.position.z) / dt);
   b.angularVelocity.set(0, 0, 0);
   held.target = target; held.q = q;
@@ -1598,37 +1823,96 @@ function hfRay(o, d, maxDist = 4) {
   return null;
 }
 
-/* ============================== Hand tracking (MediaPipe) ============================== */
+/* ============================== Hand tracking (MediaPipe, off the main thread) ============================== */
 const MP_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
 const MP_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
-const hand = { enabled: false, loading: false, lm: null, wl: null, lastSeen: 0, pinch: false, raw: null, p3: null, dist: 0, tip: null, palm: null, hover: null, frame: 0 };
-let landmarker = null, glBinding = null, rb = null;
-let tipBody = null, palmBody = null;
+const TIPS = [4, 8, 12, 16, 20];
+const hand = {
+  enabled: false, loading: false, mode: null, busy: false, lastSeen: 0, pending: null,
+  lm: null, lmT: null, p3: null, p3T: null, depth: 0, px: 60,
+  q: new T.Quaternion(), qT: new T.Quaternion(), palmC: new T.Vector3(), palmN: new T.Vector3(0, 1, 0), xAx: new T.Vector3(1, 0, 0),
+  pinchP: new T.Vector3(), anchor: new T.Vector3(), anchorPrev: null,
+  pinchOn: false, fistOn: false, grip: 'open', newGrip: 'open', hover: null,
+};
+const handTips = { active: false, pts: TIPS.map(() => ({ p: new T.Vector3(), prev: new T.Vector3(), v: new T.Vector3() })) };
+const handTray = { active: false, pos: new T.Vector3(), q: new T.Quaternion(), invQ: new T.Quaternion(), n: new T.Vector3(0, 1, 0), vel: new T.Vector3(), hx: 0.045, hz: 0.05 };
+let worker = null, landmarker = null, glBinding = null, rb = null;
+let tipBodies = [], palmBody = null, trayBody = null;
+const itemByBody = new Map();
+const pendingCatch = new Set();
+
+const WORKER_SRC = `
+let lm = null;
+self.onmessage = async (e) => {
+  const m = e.data;
+  if (m.type === 'init') {
+    try {
+      const mp = await import(m.url + '/vision_bundle.mjs');
+      const fs = await mp.FilesetResolver.forVisionTasks(m.url + '/wasm');
+      const mk = (delegate) => mp.HandLandmarker.createFromOptions(fs, { baseOptions: { modelAssetPath: m.model, delegate }, runningMode: 'VIDEO', numHands: 1, minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5 });
+      try { lm = await mk('GPU'); } catch (err) { lm = await mk('CPU'); }
+      self.postMessage({ type: 'ready' });
+    } catch (err) { self.postMessage({ type: 'error', msg: String((err && err.message) || err) }); }
+  } else if (m.type === 'frame' && lm) {
+    let res = null;
+    try { res = lm.detectForVideo(new ImageData(new Uint8ClampedArray(m.buf), m.w, m.h), m.t); } catch (err) {}
+    self.postMessage({ type: 'result', t: m.t, buf: m.buf, landmarks: res ? res.landmarks : [], worldLandmarks: res ? res.worldLandmarks : [] }, [m.buf]);
+  }
+};`;
+function startWorker() {
+  return new Promise(resolve => {
+    let done = false;
+    const finish = ok => { if (done) return; done = true; clearTimeout(to); if (!ok && worker) { try { worker.terminate(); } catch (e) {} worker = null; } resolve(ok); };
+    const to = setTimeout(() => finish(false), 30000);
+    try {
+      worker = new Worker(URL.createObjectURL(new Blob([WORKER_SRC], { type: 'text/javascript' })), { type: 'module' });
+      worker.onmessage = e => {
+        const m = e.data;
+        if (m.type === 'ready') finish(true);
+        else if (m.type === 'error') finish(false);
+        else if (m.type === 'result') {
+          hand.busy = false;
+          if (rb && m.buf && m.buf.byteLength === rb.w * rb.h * 4) rb.spare = new Uint8Array(m.buf);
+          hand.pending = { landmarks: m.landmarks, worldLandmarks: m.worldLandmarks };
+        }
+      };
+      worker.onerror = () => finish(false);
+      worker.postMessage({ type: 'init', url: MP_URL, model: MP_MODEL });
+    } catch (e) { finish(false); }
+  });
+}
+async function startMainThread() {
+  const mp = await import(MP_URL + '/vision_bundle.mjs');
+  const fs = await mp.FilesetResolver.forVisionTasks(MP_URL + '/wasm');
+  const mk = delegate => mp.HandLandmarker.createFromOptions(fs, { baseOptions: { modelAssetPath: MP_MODEL, delegate }, runningMode: 'VIDEO', numHands: 1, minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5 });
+  try { landmarker = await mk('GPU'); } catch (e) { landmarker = await mk('CPU'); }
+}
 async function toggleHand() {
   if (hand.loading) return;
   if (hand.enabled) { hand.enabled = false; setHandBtn(); handLost(); return; }
   if (!features.camera) { showHint('Hand tracking needs camera access for AR, which this phone or Chrome didn\'t allow. Update Chrome and try again', 3500); return; }
-  if (!landmarker) {
-    hand.loading = true; setHandBtn(); showHint('Loading hand tracking…');
-    try {
-      const mp = await import(MP_URL + '/vision_bundle.mjs');
-      const fs = await mp.FilesetResolver.forVisionTasks(MP_URL + '/wasm');
-      const mk = delegate => mp.HandLandmarker.createFromOptions(fs, { baseOptions: { modelAssetPath: MP_MODEL, delegate }, runningMode: 'VIDEO', numHands: 1, minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5 });
-      try { landmarker = await mk('GPU'); } catch (e) { landmarker = await mk('CPU'); }
-    } catch (e) { hand.loading = false; setHandBtn(); showHint('Couldn\'t load hand tracking: ' + (e.message || e), 3500); return; }
+  if (!hand.mode) {
+    hand.loading = true; setHandBtn(); showHint('Loading hand tracking…', 30000);
+    if (await startWorker()) hand.mode = 'worker';
+    else {
+      try { await startMainThread(); hand.mode = 'main'; }
+      catch (e) { hand.loading = false; setHandBtn(); showHint('Couldn\'t load hand tracking: ' + (e.message || e), 3500); return; }
+    }
     hand.loading = false;
   }
-  if (!tipBody) {
-    tipBody = new C.Body({ mass: 0, type: C.Body.KINEMATIC, material: groundMat, shape: new C.Sphere(0.012) });
-    palmBody = new C.Body({ mass: 0, type: C.Body.KINEMATIC, material: groundMat, shape: new C.Sphere(0.032) });
-    tipBody.collisionResponse = palmBody.collisionResponse = false;
-    tipBody.position.set(0, -100, 0); palmBody.position.set(0, -100, 0);
-    world.addBody(tipBody); world.addBody(palmBody);
+  if (!palmBody) {
+    const kin = shape => { const b = new C.Body({ mass: 0, type: C.Body.KINEMATIC, material: groundMat, shape }); b.collisionResponse = false; b.position.set(0, -100, 0); world.addBody(b); return b; };
+    tipBodies = TIPS.map(() => kin(new C.Sphere(0.009)));
+    palmBody = kin(new C.Sphere(0.028));
+    trayBody = kin(new C.Box(new C.Vec3(handTray.hx, 0.006, handTray.hz)));
+    trayBody.addEventListener('collide', e => { const it = itemByBody.get(e.body.id); if (it && !(held && held.item === it)) pendingCatch.add(it); });
   }
-  hand.enabled = true; setHandBtn();
-  showHint('Hold your phone in one hand and reach in with the other. Pinch to grab', 3500);
+  hand.enabled = true; setHandBtn(); hintLock = 0;
+  showHint('Reach in with your other hand. Pinch small things, make a fist for big things, hold your palm flat to carry or catch', 4000);
 }
 function setHandBtn() { const b = $('handBtn'); b.classList.toggle('on', hand.enabled); b.textContent = hand.loading ? '✋ …' : '✋ Hand'; }
+
+/* Camera frame readback without stalling the frame (WebGL2 pixel buffer + fence) */
 function initReadback(w, h) {
   const gl = renderer.getContext();
   const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
@@ -1644,16 +1928,17 @@ function initReadback(w, h) {
   const fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  rb = { gl, prog, buf, tex, fb, w, h, px: new Uint8Array(w * h * 4), canvas, ctx, img: ctx.createImageData(w, h),
+  const webgl2 = typeof gl.fenceSync === 'function';
+  let pbo = null;
+  if (webgl2) { pbo = gl.createBuffer(); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo); gl.bufferData(gl.PIXEL_PACK_BUFFER, w * h * 4, gl.STREAM_READ); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); }
+  rb = { gl, prog, buf, tex, fb, w, h, pbo, webgl2, sync: null, out: new Uint8Array(w * h * 4), spare: null,
     locP: gl.getAttribLocation(prog, 'p'), locT: gl.getUniformLocation(prog, 't'), locF: gl.getUniformLocation(prog, 'flip') };
   renderer.resetState();
 }
-function grabCameraFrame(cam) {
+function captureFrame(cam) {
   const tex = glBinding.getCameraImage(cam);
   if (!tex) return false;
-  const W = 256, H = Math.round(256 * cam.height / cam.width);
+  const W = 288, H = Math.round(288 * cam.height / cam.width);
   if (!rb || rb.w !== W || rb.h !== H) initReadback(W, H);
   const gl = rb.gl;
   if (gl.bindVertexArray) gl.bindVertexArray(null);
@@ -1667,80 +1952,213 @@ function grabCameraFrame(cam) {
   gl.bindBuffer(gl.ARRAY_BUFFER, rb.buf);
   gl.enableVertexAttribArray(rb.locP); gl.vertexAttribPointer(rb.locP, 2, gl.FLOAT, false, 0, 0);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  gl.readPixels(0, 0, rb.w, rb.h, gl.RGBA, gl.UNSIGNED_BYTE, rb.px);
   gl.disableVertexAttribArray(rb.locP);
+  let ready = false;
+  if (rb.webgl2) {
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, rb.pbo);
+    gl.readPixels(0, 0, rb.w, rb.h, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    rb.sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl.flush();
+  } else { gl.readPixels(0, 0, rb.w, rb.h, gl.RGBA, gl.UNSIGNED_BYTE, rb.out); ready = true; }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   renderer.resetState();
-  rb.img.data.set(rb.px); rb.ctx.putImageData(rb.img, 0, 0);
+  return ready;
+}
+function pollReadback() {
+  if (!rb || !rb.sync) return false;
+  const gl = rb.gl, st = gl.clientWaitSync(rb.sync, 0, 0);
+  if (st === gl.TIMEOUT_EXPIRED) return false;
+  gl.deleteSync(rb.sync); rb.sync = null;
+  if (st === gl.WAIT_FAILED) return false;
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, rb.pbo);
+  gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, rb.out);
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+  renderer.resetState();
   return true;
 }
+function deliverFrame(now) {
+  if (hand.mode === 'worker' && worker) {
+    hand.busy = true;
+    const buf = rb.out.buffer;
+    worker.postMessage({ type: 'frame', buf, w: rb.w, h: rb.h, t: now }, [buf]);
+    rb.out = rb.spare || new Uint8Array(rb.w * rb.h * 4); rb.spare = null;
+  } else if (landmarker) {
+    try {
+      const r = landmarker.detectForVideo(new ImageData(new Uint8ClampedArray(rb.out.buffer), rb.w, rb.h), now);
+      hand.pending = { landmarks: r.landmarks, worldLandmarks: r.worldLandmarks };
+    } catch (e) {}
+  }
+}
+function handFrameStep(cam, depthInfo, now) {
+  try {
+    if (pollReadback()) deliverFrame(now);
+    if (!hand.busy && !(rb && rb.sync)) { if (captureFrame(cam)) deliverFrame(now); }
+  } catch (e) { console.warn(e); renderer.resetState(); }
+  if (hand.pending) { const r = hand.pending; hand.pending = null; processHand(r, depthInfo, now); }
+}
+
+/* Turning landmarks into a 3D hand */
 const d3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 function lmRay(p) { return ndcRay(p.x * 2 - 1, 1 - p.y * 2); }
-function lmPoint(p, viewZ) { const dir = lmRay(p), fwd = new T.Vector3(0, 0, -1).applyQuaternion(camQuat); return camPos.clone().addScaledVector(dir, viewZ / Math.max(0.2, dir.dot(fwd))); }
+function viewFwd() { return new T.Vector3(0, 0, -1).applyQuaternion(camQuat); }
+function lmPoint(p, viewZ) { const dir = lmRay(p); return camPos.clone().addScaledVector(dir, viewZ / Math.max(0.2, dir.dot(viewFwd()))); }
+function depthAt(info, x, y) { if (!info || x <= 0 || x >= 1 || y <= 0 || y >= 1) return 0; try { return info.getDepthInMeters(x, y); } catch (e) { return 0; } }
 function processHand(res, depthInfo, now) {
-  if (!res || !res.landmarks || !res.landmarks.length) { if (now - hand.lastSeen > 350) handLost(); return; }
+  if (!res || !res.landmarks || !res.landmarks.length) { if (now - hand.lastSeen > 300) handLost(); return; }
   const lm = res.landmarks[0], wl = res.worldLandmarks[0];
-  hand.lm = lm; hand.wl = wl; hand.lastSeen = now;
+  hand.lastSeen = now;
+  // Palm distance: depth sensor first, else from the hand's known real size
   let d = null;
-  if (depthInfo) {
-    const ds = [];
-    for (const k of [0, 5, 9, 13, 17]) { const p = lm[k]; if (p.x > 0 && p.x < 1 && p.y > 0 && p.y < 1) { try { const v = depthInfo.getDepthInMeters(p.x, p.y); if (v > 0.08 && v < 1.5) ds.push(v); } catch (e) {} } }
-    if (ds.length >= 3) { ds.sort((a, b) => a - b); d = ds[ds.length >> 1]; }
-  }
+  const ds = [];
+  for (const k of [0, 5, 9, 13, 17]) { const v = depthAt(depthInfo, lm[k].x, lm[k].y); if (v > 0.08 && v < 1.5) ds.push(v); }
+  if (ds.length >= 3) { ds.sort((a, b) => a - b); d = ds[ds.length >> 1]; }
   if (d === null) {
     const L = d3(wl[0], wl[9]) + d3(wl[5], wl[17]);
     const ang = lmRay(lm[0]).angleTo(lmRay(lm[9])) + lmRay(lm[5]).angleTo(lmRay(lm[17]));
     d = L / Math.max(0.001, ang);
   }
   d = clamp(d, 0.12, 1.3);
-  hand.dist = hand.dist ? lerp(hand.dist, d, 0.45) : d;
-  const pinchScreen = { x: (lm[4].x + lm[8].x) / 2, y: (lm[4].y + lm[8].y) / 2 };
-  hand.raw = lmPoint(pinchScreen, hand.dist);
-  hand.tipRaw = lmPoint(lm[8], hand.dist);
-  hand.palmRaw = lmPoint({ x: (lm[0].x + lm[9].x) / 2, y: (lm[0].y + lm[9].y) / 2 }, hand.dist);
-  hand.screen = pinchScreen;
-  const pd = d3(wl[4], wl[8]);
-  const wasPinch = hand.pinch;
-  if (!hand.pinch && pd < 0.032) hand.pinch = true;
-  else if (hand.pinch && pd > 0.055) hand.pinch = false;
-  if (!hand.p3) { hand.p3 = hand.raw.clone(); hand.tip = hand.tipRaw.clone(); hand.palm = hand.palmRaw.clone(); }
-  // hover target
-  hand.hover = findHandTarget();
-  if (hand.pinch && !wasPinch && !held) {
-    const t = hand.hover;
-    if (t) startGrab(t, 'hand', hand.p3);
+  hand.depth = hand.depth ? lerp(hand.depth, d, 0.5) : d;
+  const wc = (wl[0].z + wl[5].z + wl[9].z + wl[13].z + wl[17].z) / 5;
+  const p3T = [];
+  for (let k = 0; k < 21; k++) {
+    let z = hand.depth + (wl[k].z - wc);
+    if (TIPS.includes(k)) { const dk = depthAt(depthInfo, lm[k].x, lm[k].y); if (dk > 0.08 && Math.abs(dk - z) < 0.06) z = dk * 0.6 + z * 0.4; }
+    p3T.push(lmPoint(lm[k], z));
   }
-  if (!hand.pinch && wasPinch && held && held.mode === 'hand') releaseGrab();
+  hand.p3T = p3T;
+  hand.lmT = lm.map(p => ({ x: p.x, y: p.y }));
+  if (!hand.p3) { hand.p3 = p3T.map(p => p.clone()); hand.lm = hand.lmT.map(p => ({ ...p })); hand.anchorPrev = null; }
+  // Grips: fist beats pinch
+  const pc = { x: (wl[0].x + wl[5].x + wl[9].x + wl[13].x + wl[17].x) / 5, y: (wl[0].y + wl[5].y + wl[9].y + wl[13].y + wl[17].y) / 5, z: wc };
+  const fistD = (d3(wl[8], pc) + d3(wl[12], pc) + d3(wl[16], pc) + d3(wl[20], pc)) / 4;
+  const pinchD = d3(wl[4], wl[8]);
+  if (!hand.fistOn && fistD < 0.068) hand.fistOn = true; else if (hand.fistOn && fistD > 0.088) hand.fistOn = false;
+  if (!hand.pinchOn && pinchD < 0.03) hand.pinchOn = true; else if (hand.pinchOn && pinchD > 0.052) hand.pinchOn = false;
+  hand.newGrip = hand.fistOn ? 'fist' : hand.pinchOn ? 'pinch' : 'open';
 }
-function findHandTarget() {
-  if (!hand.raw) return null;
+function findHandTarget(grip) {
+  if (!hand.p3) return null;
+  const pt = grip === 'fist' ? hand.palmC : hand.pinchP, reach = grip === 'fist' ? 0.085 : 0.055;
   let best = null, bd = Infinity;
   for (const it of items) {
-    const p = it.body.position, dist = Math.hypot(p.x - hand.raw.x, p.y - hand.raw.y, p.z - hand.raw.z) - it.r;
-    if (dist < 0.07 && dist < bd) { bd = dist; best = it; }
+    if (held && held.item === it) continue;
+    const p = it.body.position, dist = Math.hypot(p.x - pt.x, p.y - pt.y, p.z - pt.z) - it.r;
+    if (dist < reach && dist < bd) { bd = dist; best = it; }
   }
   if (best) return best;
-  const r = pickRay(lmRay(hand.screen), 3);
-  if (r) { const fwd = new T.Vector3(0, 0, -1).applyQuaternion(camQuat); const dirZ = lmRay(hand.screen).dot(fwd); if (Math.abs(r.dist * dirZ - hand.dist) < 0.3) return r.it; }
+  const sp = grip === 'fist' ? { x: (hand.lm[0].x + hand.lm[9].x) / 2, y: (hand.lm[0].y + hand.lm[9].y) / 2 } : { x: (hand.lm[4].x + hand.lm[8].x) / 2, y: (hand.lm[4].y + hand.lm[8].y) / 2 };
+  const dir = lmRay(sp), r = pickRay(dir, 3);
+  if (r && Math.abs(r.dist * dir.dot(viewFwd()) - hand.depth) < 0.15) return r.it;
   return null;
 }
-function handLost() {
-  hand.lm = null; hand.raw = null; hand.p3 = null; hand.pinch = false; hand.hover = null; hand.dist = 0;
-  if (held && held.mode === 'hand') releaseGrab();
-  if (tipBody) { tipBody.collisionResponse = palmBody.collisionResponse = false; tipBody.position.set(0, -100, 0); palmBody.position.set(0, -100, 0); tipBody.velocity.set(0, 0, 0); palmBody.velocity.set(0, 0, 0); }
-}
-function updateHandBodies(dt) {
-  if (!hand.enabled || !hand.raw) return;
-  const a = 1 - Math.pow(0.0005, dt);
-  hand.p3.lerp(hand.raw, a); hand.tip.lerp(hand.tipRaw, a); hand.palm.lerp(hand.palmRaw, a);
-  const push = opts.handPush && !(held && held.mode === 'hand') && !hand.pinch;
-  for (const [b, p] of [[tipBody, hand.tip], [palmBody, hand.palm]]) {
-    if (!push) { b.collisionResponse = false; b.position.set(0, -100, 0); b.velocity.set(0, 0, 0); continue; }
-    if (!b.collisionResponse) { b.position.set(p.x, p.y, p.z); b.collisionResponse = true; }
-    b.velocity.set((p.x - b.position.x) / dt, (p.y - b.position.y) / dt, (p.z - b.position.z) / dt);
+const _m4 = new T.Matrix4(), _x = new T.Vector3(), _y = new T.Vector3(), _z = new T.Vector3();
+function updateHand(dt, now) {
+  if (!hand.enabled || !hand.p3 || !hand.p3T) { setHandColliders(false, dt); occU.uHandOn.value = 0; return; }
+  const a = 1 - Math.pow(0.00002, dt);
+  for (let k = 0; k < 21; k++) { hand.p3[k].lerp(hand.p3T[k], a); hand.lm[k].x = lerp(hand.lm[k].x, hand.lmT[k].x, a); hand.lm[k].y = lerp(hand.lm[k].y, hand.lmT[k].y, a); }
+  const P = hand.p3;
+  hand.palmC.copy(P[0]).add(P[5]).add(P[9]).add(P[13]).add(P[17]).multiplyScalar(0.2);
+  _y.copy(P[9]).sub(P[0]).normalize();
+  _x.copy(P[5]).sub(P[17]); _z.crossVectors(_x, _y).normalize(); _x.crossVectors(_y, _z).normalize();
+  _m4.makeBasis(_x, _y, _z); hand.qT.setFromRotationMatrix(_m4);
+  if (!hand.qInit) { hand.q.copy(hand.qT); hand.qInit = true; } else hand.q.slerp(hand.qT, a);
+  hand.xAx.copy(_x);
+  hand.palmN.copy(_z.y >= 0 ? _z : _z.negate());
+  hand.pinchP.copy(P[4]).add(P[8]).multiplyScalar(0.5);
+  hand.anchor.copy(hand.grip === 'fist' ? hand.palmC : hand.pinchP);
+  hand.px = Math.hypot((hand.lm[0].x - hand.lm[9].x) * innerWidth, (hand.lm[0].y - hand.lm[9].y) * innerHeight);
+  // Grip changes → grab / release
+  if (hand.newGrip !== hand.grip) {
+    hand.grip = hand.newGrip;
+    hand.anchor.copy(hand.grip === 'fist' ? hand.palmC : hand.pinchP);
+    if (held && held.mode === 'hand' && hand.grip !== held.grip) releaseGrab();
+    if (!held && hand.grip !== 'open') {
+      const t = findHandTarget(hand.grip);
+      if (t) {
+        if (hand.grip === 'pinch' && t.r > 0.09) showHint('That\'s big. Make a fist to grab it', 1600);
+        else { startGrab(t, 'hand', hand.anchor); held.grip = hand.grip; }
+      }
+    }
   }
+  hand.hover = held ? null : findHandTarget(hand.fistOn ? 'fist' : 'pinch');
+  setHandColliders(true, dt);
+  drawHandMask();
 }
-const HAND_LINKS = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12], [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [17, 18], [18, 19], [19, 20], [0, 17]];
+function setHandColliders(on, dt) {
+  if (!palmBody) return;
+  const active = on && opts.handPush && !(held && held.mode === 'hand') && hand.grip === 'open';
+  handTips.active = on;
+  for (let i = 0; i < 5; i++) {
+    const tp = handTips.pts[i];
+    if (on) { tp.prev.copy(tp.p); tp.p.copy(hand.p3[TIPS[i]]); tp.v.copy(tp.p).sub(tp.prev).divideScalar(Math.max(dt, 1e-3)); if (tp.v.length() > 6) tp.v.setLength(6); }
+    moveKin(tipBodies[i], active, tp.p, dt);
+  }
+  const trayOn = active && hand.palmN.y > 0.55;
+  if (on) {
+    const up = hand.palmN, right = hand.xAx.clone().addScaledVector(up, -hand.xAx.dot(up)).normalize(), fwd = new T.Vector3().crossVectors(right, up);
+    _m4.makeBasis(right, up, fwd);
+    const prevPos = handTray.pos.clone();
+    handTray.q.setFromRotationMatrix(_m4); handTray.invQ.copy(handTray.q).invert(); handTray.n.copy(up);
+    handTray.pos.copy(hand.palmC).addScaledVector(up, 0.012);
+    handTray.vel.copy(handTray.pos).sub(prevPos).divideScalar(Math.max(dt, 1e-3)); if (handTray.vel.length() > 6) handTray.vel.setLength(6);
+  }
+  handTray.active = on && hand.palmN.y > 0.55 && hand.grip === 'open' && !(held && held.mode === 'hand');
+  moveKin(trayBody, trayOn, handTray.pos, dt, handTray.q);
+  moveKin(palmBody, active && !trayOn, hand.palmC, dt);
+}
+function moveKin(b, on, p, dt, q) {
+  if (!on) { if (b.collisionResponse) { b.collisionResponse = false; b.position.set(0, -100, 0); b.velocity.set(0, 0, 0); } return; }
+  if (!b.collisionResponse) { b.position.set(p.x, p.y, p.z); b.collisionResponse = true; }
+  b.velocity.set((p.x - b.position.x) / dt, (p.y - b.position.y) / dt, (p.z - b.position.z) / dt);
+  if (q) b.quaternion.set(q.x, q.y, q.z, q.w);
+}
+function applyCatches() {
+  for (const it of pendingCatch) {
+    if (!items.includes(it)) continue;
+    const v = it.body.velocity;
+    if (v.length() > 0.5) { v.scale(0.3, v); it.body.angularVelocity.scale(0.3, it.body.angularVelocity); if (it.spec.wobble) { it.wob = Math.min(0.35, it.wob + 0.1); it.wobT = 0; } buzz(12); }
+  }
+  pendingCatch.clear();
+}
+function handLost() {
+  hand.lm = null; hand.lmT = null; hand.p3 = null; hand.p3T = null; hand.pinchOn = false; hand.fistOn = false; hand.grip = 'open'; hand.newGrip = 'open'; hand.hover = null; hand.depth = 0; hand.qInit = false;
+  if (held && held.mode === 'hand') releaseGrab();
+  handTray.active = false; handTips.active = false;
+  for (const d of drops) if (d.stuck) { d.stuck = null; d.v.set(0, -0.2, 0); }
+  if (palmBody) { for (const b of [...tipBodies, palmBody, trayBody]) moveKin(b, false); }
+  occU.uHandOn.value = 0;
+}
+
+/* Hand outline mask: virtual objects hide cleanly behind your real hand */
+const maskCv = document.createElement('canvas');
+const maskCtx = maskCv.getContext('2d');
+const handMaskTex = new T.CanvasTexture(maskCv);
+occU.uHandMask.value = handMaskTex;
+handMaskTex.minFilter = T.LinearFilter; handMaskTex.magFilter = T.LinearFilter; handMaskTex.generateMipmaps = false;
+const FINGERS = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]];
+function drawHandMask() {
+  const W = 144, H = Math.round(144 * innerHeight / innerWidth);
+  if (maskCv.width !== W || maskCv.height !== H) { maskCv.width = W; maskCv.height = H; }
+  const g = maskCtx, lm = hand.lm;
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = g.strokeStyle = '#fff'; g.lineCap = 'round'; g.lineJoin = 'round';
+  const P = i => [lm[i].x * W, lm[i].y * H];
+  const palmW = Math.hypot(P(0)[0] - P(9)[0], P(0)[1] - P(9)[1]);
+  g.beginPath(); for (const i of [0, 1, 2, 5, 9, 13, 17]) { const [x, y] = P(i); i === 0 ? g.moveTo(x, y) : g.lineTo(x, y); } g.closePath(); g.fill();
+  g.lineWidth = palmW * 0.28; g.stroke();
+  FINGERS.forEach((f, fi) => {
+    g.lineWidth = palmW * (fi === 0 ? 0.3 : fi === 4 ? 0.22 : 0.26);
+    g.beginPath(); const s = fi === 0 ? P(1) : P(f[0]); g.moveTo(s[0], s[1]);
+    for (const i of f) { const [x, y] = P(i); g.lineTo(x, y); } g.stroke();
+  });
+  handMaskTex.needsUpdate = true;
+  const fwd = viewFwd(); let minZ = Infinity;
+  for (const p of hand.p3) minZ = Math.min(minZ, p.clone().sub(camPos).dot(fwd));
+  occU.uHandDepth.value = minZ + 0.02;
+  occU.uHandOn.value = 1;
+}
 
 /* ============================== FX overlay (trails, hand) ============================== */
 const fx = $('fx'), fxc = fx.getContext('2d');
@@ -1760,14 +2178,21 @@ function drawFx(now) {
   }
   if (hand.enabled && hand.lm) {
     const W = fx.width, H = fx.height, lm = hand.lm;
-    fxc.strokeStyle = 'rgba(255,255,255,.55)'; fxc.lineWidth = 3;
-    for (const [a, b] of HAND_LINKS) { fxc.beginPath(); fxc.moveTo(lm[a].x * W, lm[a].y * H); fxc.lineTo(lm[b].x * W, lm[b].y * H); fxc.stroke(); }
-    fxc.fillStyle = 'rgba(255,255,255,.9)';
-    for (const p of lm) { fxc.beginPath(); fxc.arc(p.x * W, p.y * H, 3.5, 0, Math.PI * 2); fxc.fill(); }
-    const px = hand.screen.x * W, py = hand.screen.y * H;
-    fxc.lineWidth = 4;
-    fxc.strokeStyle = hand.pinch ? '#2ee59d' : (hand.hover ? '#ffb347' : 'rgba(255,255,255,.7)');
-    fxc.beginPath(); fxc.arc(px, py, hand.pinch ? 12 : 20, 0, Math.PI * 2); fxc.stroke();
+    const col = hand.grip !== 'open' ? '46,229,157' : hand.hover ? '255,179,71' : '150,230,255';
+    const r0 = clamp(hand.px * 0.13, 7, 34);
+    fxc.save(); fxc.globalCompositeOperation = 'lighter';
+    for (const k of TIPS) {
+      const x = lm[k].x * W, y = lm[k].y * H, r = r0 * (k === 4 ? 1.1 : 1);
+      const gr = fxc.createRadialGradient(x, y, 0, x, y, r);
+      gr.addColorStop(0, `rgba(255,255,255,0.95)`); gr.addColorStop(0.25, `rgba(${col},0.75)`); gr.addColorStop(1, `rgba(${col},0)`);
+      fxc.fillStyle = gr; fxc.beginPath(); fxc.arc(x, y, r, 0, Math.PI * 2); fxc.fill();
+    }
+    if (handTray.active) {
+      const cx = (lm[0].x + lm[9].x) / 2 * W, cy = (lm[0].y + lm[9].y) / 2 * H, rr = r0 * 2.2;
+      const gr = fxc.createRadialGradient(cx, cy, 0, cx, cy, rr); gr.addColorStop(0, `rgba(${col},0.18)`); gr.addColorStop(1, `rgba(${col},0)`);
+      fxc.fillStyle = gr; fxc.beginPath(); fxc.arc(cx, cy, rr, 0, Math.PI * 2); fxc.fill();
+    }
+    fxc.restore();
   }
 }
 
@@ -1791,7 +2216,7 @@ function setTrash(on) { trashMode = on; $('trashBtn').classList.toggle('red', on
 $('trashBtn').onclick = () => setTrash(!trashMode);
 $('clearBtn').onclick = () => {
   [...items].forEach(it => removeItem(it, true));
-  drops.length = 0; puddles.forEach(p => scene.remove(p.m)); puddles.length = 0;
+  drops.length = 0; puddles.forEach(p => scene.remove(p.m)); puddles.length = 0; puffs.forEach(p => scene.remove(p.sp)); puffs.length = 0;
   sfx.poof(); showHint('All cleared', 1200);
 };
 $('sizeBtn').onclick = () => { sizeIdx = (sizeIdx + 1) % SIZES.length; $('sizeBtn').textContent = SIZES[sizeIdx].n; };
@@ -1953,14 +2378,9 @@ renderer.setAnimationLoop((t, frame) => {
       const bl = frame.session.renderState.baseLayer;
       if (bl) occU.uRes.value.set(bl.framebufferWidth, bl.framebufferHeight);
       occU.uOcc.value = (depthInfo && opts.occlusion) ? 1 : 0;
-      // Hand tracking: grab the camera image and run the detector every other frame
-      if (hand.enabled && landmarker && glBinding && view.camera) {
-        hand.frame++;
-        if (hand.frame % 2 === 0) {
-          try { if (grabCameraFrame(view.camera)) processHand(landmarker.detectForVideo(rb.canvas, now), depthInfo, now); }
-          catch (e) { console.warn(e); renderer.resetState(); }
-        }
-      } else if (hand.enabled && !view.camera && features.camera) { features.camera = false; updateFeatStat(); }
+      // Hand tracking: camera frames go to a background worker; results are applied here
+      if (hand.enabled && hand.mode && glBinding && view.camera) handFrameStep(view.camera, depthInfo, now);
+      else if (hand.enabled && !view.camera && features.camera) { features.camera = false; updateFeatStat(); }
     }
     if (hitSource) {
       const hits = frame.getHitTestResults(hitSource);
@@ -1984,9 +2404,9 @@ renderer.setAnimationLoop((t, frame) => {
       }
       reticle.visible = shown && !held;
       if (now > hintLock) {
-        $('hint').textContent = held ? (held.mode === 'hand' ? 'Open your hand to drop' : 'Let go to drop, flick to throw')
+        $('hint').textContent = held ? (held.mode === 'hand' ? 'Turn your wrist to rotate. Open your hand to drop' : 'Let go to drop, flick to throw')
           : trashMode ? 'Trash mode: tap items to remove them'
-          : (hand.enabled && hand.lm) ? (hand.hover ? `Pinch to grab the ${hand.hover.spec.label.toLowerCase()}` : 'Reach toward something and pinch')
+          : (hand.enabled && hand.lm) ? (hand.hover ? (hand.hover.r > 0.09 ? `Make a fist to grab the ${hand.hover.spec.label.toLowerCase()}` : `Pinch to grab the ${hand.hover.spec.label.toLowerCase()}`) : handTray.active ? 'Palm up: things can sit in your hand' : 'Reach toward something. Pinch or make a fist')
           : shown ? `Tap to place ${SPECS[selected].emoji} · swipe to slice · hold to grab`
           : 'Point at the floor or a table and move your phone slowly';
       }
@@ -1999,13 +2419,15 @@ renderer.setAnimationLoop((t, frame) => {
       xrLight.position.set(camPos.x, floorY, camPos.z);
     }
   }
-  updateHandBodies(dt);
+  updateHand(dt, now);
   updateHeld(dt, now);
   updatePouring(dt);
   world.step(1 / 60, dt, 4);
   if (pendingBreak.size) { for (const it of [...pendingBreak]) shatter(it); pendingBreak.clear(); }
+  applyCatches();
   snapHeld();
   updateDrops(dt);
+  updatePuddles(dt, now);
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i], b = it.body;
     it.mesh.position.set(b.position.x, b.position.y, b.position.z);

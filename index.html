@@ -96,7 +96,7 @@
     <div id="hint">Point at the floor or a table and move your phone slowly</div>
     <div class="panel" id="settings">
       <div class="row"><span>Hide behind real objects</span><button class="tog on" data-k="occlusion"></button></div>
-      <div class="row"><span>Real-shape physics (room scan)</span><button class="tog on" data-k="obstacles"></button></div>
+      <div class="row"><span>3D room scan physics</span><button class="tog on" data-k="obstacles"></button></div>
       <div class="row"><span>Show room scan</span><button class="tog" data-k="showScan"></button></div>
       <div class="row"><span>Hand pushes objects</span><button class="tog on" data-k="handPush"></button></div>
       <div class="row"><span>Flip hand camera (if hand dots are upside-down)</span><button class="tog" data-k="flipCam"></button></div>
@@ -214,7 +214,7 @@ uniform sampler2D uHandMask; uniform float uHandOn; uniform float uHandDepth;
 void main() {
   vec2 sc = gl_FragCoord.xy / uRes;
   float hm = 0.0;
-  if (uHandOn > 0.5) { hm = texture2D(uHandMask, sc).r; if (hm > 0.5 && vViewPosition.z > uHandDepth) discard; }
+  if (uHandOn > 0.5) hm = texture2D(uHandMask, sc).r;
   if (uOcc > 0.5 && hm < 0.02) {
     vec2 duv = (uDepthMat * vec4(sc.x, 1.0 - sc.y, 0.0, 1.0)).xy;
     vec2 rg = texture2D(uDepthTex, duv).rg;
@@ -233,7 +233,14 @@ function updateDepthTexture(info) {
     depthTex.magFilter = T.LinearFilter; depthTex.minFilter = T.LinearFilter;
     occU.uDepthTex.value = depthTex;
   }
-  depthTex.image.data.set(new Uint8Array(info.data));
+  const src = new Uint16Array(info.data), dst = depthTex.image.data;
+  if (!depthTex.userData.f || depthTex.userData.f.length !== src.length) depthTex.userData.f = new Float32Array(src.length);
+  const f = depthTex.userData.f, jump = 0.15 / info.rawValueToMeters;
+  for (let i = 0; i < src.length; i++) {
+    const r = src[i]; let v = f[i];
+    if (r > 0) v = (v === 0 || Math.abs(r - v) > jump) ? r : v * 0.65 + r * 0.35;
+    f[i] = v; const iv = v | 0; dst[i * 2] = iv & 255; dst[i * 2 + 1] = iv >> 8;
+  }
   depthTex.needsUpdate = true;
   occU.uDepthMat.value.fromArray(info.normDepthBufferFromNormView.matrix);
   occU.uRaw.value = info.rawValueToMeters;
@@ -800,7 +807,6 @@ SPECS.soda = base({ label: 'Soda', emoji: '🥤', kind: 'drink', mass: 0.38, res
   },
 });
 SPECS.glass = base({ label: 'Glass', emoji: '🥛', kind: 'object', mass: 0.22, rest: 0.15, fric: 0.5, sound: 'glass', breakable: 3.2,
-  container: { r: 0.029, h: 0.11, bottom: -0.054, cap: 230, start: 0, rim: 0.034 },
   build: s => {
     const g = new T.Group();
     const pts = [[0, 0], [0.03, 0], [0.036, 0.12], [0.0345, 0.12], [0.0285, 0.007], [0, 0.007]].map(p => new T.Vector2(p[0] * s, (p[1] - 0.06) * s));
@@ -813,23 +819,6 @@ SPECS.glass = base({ label: 'Glass', emoji: '🥛', kind: 'object', mass: 0.22, 
     return { g, shapes, r: 0.065 * s };
   },
 });
-SPECS.jug = base({ label: 'Jug', emoji: '🫗', kind: 'object', mass: 0.9, rest: 0.12, fric: 0.5, sound: 'glass',
-  container: { r: 0.05, h: 0.17, bottom: -0.094, cap: 600, start: 0.85, liquid: 'water', rim: 0.056, endless: true },
-  build: s => {
-    const g = new T.Group();
-    const prof = [[0, 0], [0.05, 0], [0.056, 0.02], [0.058, 0.15], [0.052, 0.19], [0.056, 0.2], [0.0545, 0.2], [0.05, 0.19], [0.0565, 0.15], [0.0545, 0.021], [0.048, 0.006], [0, 0.006]]
-      .map(([x, y]) => new T.Vector2(x * s, (y - 0.1) * s));
-    const body = new T.Mesh(new T.LatheGeometry(prof, 44), M.glass()); body.renderOrder = 2; g.add(body);
-    const handle = new T.Mesh(new T.TorusGeometry(0.045 * s, 0.0075 * s, 10, 24, Math.PI), M.glass());
-    handle.rotation.z = Math.PI / 2; handle.position.set(-0.056 * s, 0.01 * s, 0); handle.renderOrder = 2; g.add(handle);
-    const lip = new T.Mesh(new T.ConeGeometry(0.014 * s, 0.022 * s, 12, 1, true, -Math.PI / 2, Math.PI), M.glass());
-    lip.rotation.z = -Math.PI / 2 - 0.5; lip.position.set(0.058 * s, 0.098 * s, 0); g.add(lip);
-    const shapes = [cylS(0.052 * s, 0.052 * s, 0.01 * s, [0, -0.095 * s, 0])];
-    for (let i = 0; i < 10; i++) { const a = i / 10 * Math.PI * 2; shapes.push(boxS(0.019 * s, 0.098 * s, 0.003 * s, [Math.sin(a) * 0.058 * s, 0.003 * s, Math.cos(a) * 0.058 * s], qY(a))); }
-    shapes.push(boxS(0.012 * s, 0.045 * s, 0.006 * s, [-0.1 * s, 0.01 * s, 0]));
-    return { g, shapes, r: 0.11 * s };
-  },
-});
 SPECS.plate = base({ label: 'Plate', emoji: '🍽️', kind: 'object', mass: 0.45, rest: 0.18, fric: 0.6, sound: 'ceramic', breakable: 3.6,
   build: s => {
     const g = new T.Group();
@@ -840,7 +829,6 @@ SPECS.plate = base({ label: 'Plate', emoji: '🍽️', kind: 'object', mass: 0.4
   },
 });
 SPECS.bowl = base({ label: 'Bowl', emoji: '🥣', kind: 'object', mass: 0.35, rest: 0.18, fric: 0.6, sound: 'ceramic', breakable: 3.8,
-  container: { r: 0.06, h: 0.048, bottom: -0.019, cap: 420, start: 0, rim: 0.077, bowl: true },
   build: s => {
     const g = new T.Group();
     const outer = [[0, 0], [0.04, 0], [0.05, 0.005], [0.07, 0.03], [0.08, 0.06]].map(([x, y]) => new T.Vector2(x * s, (y - 0.03) * s));
@@ -916,7 +904,7 @@ SPECS.dominoes = { label: 'Dominoes', emoji: '🁫', kind: 'set', place: (p, fwd
   }
   showHint('Tap the first domino to start the chain', 2500);
 } };
-const MENU = ['pizza', 'burger', 'donut', 'apple', 'orange', 'banana', 'watermelon', 'cake', 'pancakes', 'jelly', 'soda', 'jug', 'glass', 'plate', 'bowl', 'ball', 'bowling', 'pins', 'jenga', 'dominoes'];
+const MENU = ['pizza', 'burger', 'donut', 'apple', 'orange', 'banana', 'watermelon', 'cake', 'pancakes', 'jelly', 'soda', 'glass', 'plate', 'bowl', 'ball', 'bowling', 'pins', 'jenga', 'dominoes'];
 
 // Piece helpers ---------------------------------------------------------
 function centered(raw, shapeFn) {
@@ -978,12 +966,11 @@ function setFloor(y) {
   }
   floorBody.position.set(0, y, 0);
   floorShadow.position.set(0, y + 0.001, 0);
-  if (HF.geo) { const pos = HF.geo.attributes.position.array; for (let v = 0; v < HF.known.length; v++) if (!HF.known[v]) pos[v * 3 + 1] = y; HF.geo.attributes.position.needsUpdate = true; }
   if (old !== null && old - y > 0.15) for (const it of items) { const p = it.body.position; if (p.y > old - 0.05 && p.y < old + 0.4) ensureSlab(p.x, old, p.z); }
 }
 function ensureSlab(x, y, z) {
   if (floorY !== null && y < floorY + 0.12) return;
-  const hy = hfGet(x, z); if (hy !== null && Math.abs(hy - y) < 0.1) return;
+  const hy = voxSurfaceY(x, z, y + 0.12); if (hy !== null && Math.abs(hy - y) < 0.08) return;
   for (const s of slabs) if (Math.abs(s.y - y) < 0.05 && Math.hypot(s.x - x, s.z - z) < 0.3) return;
   const half = 0.4, thick = 0.05;
   const body = new C.Body({ mass: 0, material: groundMat, shape: new C.Box(new C.Vec3(half, thick, half)) });
@@ -994,7 +981,7 @@ function ensureSlab(x, y, z) {
 }
 function surfaceY(x, z, below = Infinity) {
   let y = floorY === null ? -Infinity : floorY;
-  const hy = hfGet(x, z); if (hy !== null && hy < below && hy > y) y = hy;
+  const hy = voxSurfaceY(x, z, below); if (hy !== null && hy > y) y = hy;
   for (const s of slabs) if (s.y < below && s.y > y && Math.abs(x - s.x) < s.half && Math.abs(z - s.z) < s.half) y = s.y;
   return y;
 }
@@ -1081,10 +1068,9 @@ function spawnSpec(spec, scale, pos, quat, built) {
   outer.userData.item = it;
   itemByBody.set(body.id, it);
   if (spec.container) {
-    const ct = spec.container; it.fill = ct.start; it.opened = !ct.sealed; it.liquidKey = ct.liquid || null;
-    it.liquidColor = new T.Color(ct.liquid ? LIQ[ct.liquid].color : 0xffffff);
-    if (!ct.sealed) {
-      const lm = liquidMat(ct.liquid || 'water');
+    const ct = spec.container; it.fill = ct.start; it.opened = !ct.sealed; it.liquidKey = null;
+    if (false) {
+      const lm = null;
       if (ct.bowl) { it.liquid = new T.Mesh(new T.CircleGeometry(1, 40).rotateX(-Math.PI / 2), lm); }
       else { it.liquid = new T.Mesh(new T.CylinderGeometry(ct.r * scale, ct.r * scale * 0.93, 1, 32), lm); }
       it.liquid.renderOrder = 1; inner.add(it.liquid); updateLiquid(it);
@@ -1099,9 +1085,7 @@ function updateLiquid(it) {
   if (!it.liquid) return;
   const ct = it.spec.container, s = it.scale;
   it.liquid.visible = it.fill > 0.01;
-  const L = LIQ[it.liquidKey] || LIQ.water, lm = it.liquid.material;
-  lm.color.copy(it.liquidColor); lm.opacity = Math.max(0.55, L.opacity); lm.transparent = lm.opacity < 1;
-  lm.emissive.set(L.emissive || 0x000000); lm.emissiveIntensity = L.ei || 0;
+
   if (ct.bowl) {
     const h = it.fill * ct.h, rr = h < 0.022 ? lerp(0.045, 0.064, h / 0.022) : lerp(0.064, 0.074, (h - 0.022) / 0.027);
     it.liquid.position.y = (ct.bottom + h) * s; it.liquid.scale.set(rr * s, 1, rr * s);
@@ -1144,295 +1128,7 @@ function burst(p, color, n, r) {
 }
 const CRUMB = { pizza: 0xd9a35b, burger: 0xd99a4e, donut: 0xd4924a, apple: 0xfff4d6, orange: 0xff8c1a, banana: 0xfff1a8, watermelon: 0xe63946, cake: 0xfff1e6, pancakes: 0xe0a458, jelly: 0xff2a4a };
 
-/* Liquids: drops, puddles that flow over the room scan, steam and fizz */
-const LIQ = {
-  water:  { name: 'Water', emoji: '💧', color: 0x8ec9f2, opacity: 0.5, visc: 1, size: 1 },
-  juice:  { name: 'Orange juice', emoji: '🧃', color: 0xff9612, opacity: 0.9, visc: 1.1, size: 1 },
-  milk:   { name: 'Milk', emoji: '🥛', color: 0xf5f4ee, opacity: 0.97, visc: 1.2, size: 1 },
-  cola:   { name: 'Cola', emoji: '🥤', color: 0x3a1608, opacity: 0.93, visc: 1, size: 1, fizz: true },
-  coffee: { name: 'Coffee', emoji: '☕', color: 0x4a2a14, opacity: 0.95, visc: 1, size: 1, steam: 0.8 },
-  honey:  { name: 'Honey', emoji: '🍯', color: 0xd88a0e, opacity: 0.88, visc: 5, size: 1.5, emissive: 0x2a1400, ei: 0.4 },
-  choco:  { name: 'Chocolate', emoji: '🍫', color: 0x3b1c0c, opacity: 1, visc: 4, size: 1.5 },
-  slime:  { name: 'Slime', emoji: '🟢', color: 0x6dff2e, opacity: 0.86, visc: 3, size: 1.4, emissive: 0x2fae00, ei: 0.9 },
-  lava:   { name: 'Lava', emoji: '🌋', color: 0xff5a00, opacity: 1, visc: 4, size: 1.5, emissive: 0xff3a00, ei: 2.2, steam: 3, hot: true },
-  foam:   { name: 'Foam', emoji: '🫧', color: 0xe9dfcf, opacity: 0.9, visc: 1, size: 0.7, noPuddle: true },
-};
-const LIQ_ORDER = ['water', 'juice', 'milk', 'cola', 'coffee', 'honey', 'choco', 'slime', 'lava'];
-const dropArea = key => 0.00011 / Math.pow(LIQ[key].visc, 0.3);
-function liquidMat(key) {
-  const L = LIQ[key] || LIQ.water;
-  return patch(new T.MeshPhysicalMaterial({ color: L.color, roughness: key === 'choco' ? 0.12 : 0.03, clearcoat: 1, clearcoatRoughness: 0.05,
-    transparent: L.opacity < 1, opacity: L.opacity, emissive: L.emissive || 0x000000, emissiveIntensity: L.ei || 0 }));
-}
-const LMAX = 260;
-const lGeo = new T.SphereGeometry(0.0042, 7, 5);
-const dropMeshes = {};
-function dropMesh(key) {
-  if (dropMeshes[key]) return dropMeshes[key];
-  const m = new T.InstancedMesh(lGeo, liquidMat(key), LMAX);
-  m.instanceMatrix.setUsage(T.DynamicDrawUsage); m.count = 0; m.frustumCulled = false; m.castShadow = false;
-  scene.add(m); return (dropMeshes[key] = m);
-}
-const drops = [];
-function emitDrop(p, v, key, src) {
-  if (drops.length >= 900) return;
-  key = LIQ[key] ? key : 'water';
-  drops.push({ p: p.clone(), v: v.clone(), key, life: 4, src, splash: false, stuck: null, bounces: 0 });
-}
-let lastSplash = 0, lastSizzle = 0;
-function updateDrops(dt) {
-  const lp = new T.Vector3(), invQ = new T.Quaternion(), n = new T.Vector3();
-  const tray = handTray.active ? handTray : null;
-  let pooled = 0;
-  for (let i = drops.length - 1; i >= 0; i--) {
-    const d = drops[i], L = LIQ[d.key];
-    // Drops resting in your palm
-    if (d.stuck) {
-      if (!tray) { d.stuck = null; d.v.set(0, -0.2, 0); continue; }
-      pooled++;
-      const gl = new T.Vector3(0, -9.8, 0).applyQuaternion(tray.invQ);
-      const tilt = 1 - tray.n.y;
-      d.stuck.x += gl.x * dt * 0.012 * (0.3 + tilt * 3) / L.visc;
-      d.stuck.z += gl.z * dt * 0.012 * (0.3 + tilt * 3) / L.visc;
-      d.p.copy(d.stuck).applyQuaternion(tray.q).add(tray.pos);
-      d.life -= dt;
-      if (Math.abs(d.stuck.x) > tray.hx || Math.abs(d.stuck.z) > tray.hz || d.life <= 0) {
-        const slide = new T.Vector3(gl.x, 0, gl.z).applyQuaternion(tray.q).multiplyScalar(0.03);
-        d.v.copy(tray.vel).add(slide); d.stuck = null; d.life = 3;
-      }
-      continue;
-    }
-    d.v.y -= 9.8 * dt; d.p.addScaledVector(d.v, dt); d.life -= dt;
-    let dead = d.life <= 0;
-    if (!dead && !d.splash) {
-      // Hand: palm tray catches and pools, fingertips deflect
-      if (tray && d.v.y < 0.2) {
-        lp.copy(d.p).sub(tray.pos).applyQuaternion(tray.invQ);
-        if (Math.abs(lp.x) < tray.hx && Math.abs(lp.z) < tray.hz && lp.y < 0.014 && lp.y > -0.025) {
-          if (pooled < 80) { d.stuck = new T.Vector3(lp.x, 0.008, lp.z); d.life = 0.8 + L.visc * 0.6; pooled++; continue; }
-          d.v.reflect(tray.n).multiplyScalar(0.25).add(tray.vel); d.bounces++;
-        }
-      }
-      if (handTips.active) for (const tp of handTips.pts) {
-        const dx = d.p.x - tp.p.x, dy = d.p.y - tp.p.y, dz = d.p.z - tp.p.z, dd = dx * dx + dy * dy + dz * dz;
-        if (dd < 0.00018) {
-          n.set(dx, dy, dz).normalize();
-          const vn = d.v.dot(n); if (vn < 0) d.v.addScaledVector(n, -1.4 * vn);
-          d.v.multiplyScalar(0.45).addScaledVector(tp.v, 0.6);
-          d.p.copy(tp.p).addScaledVector(n, 0.0135); d.bounces++;
-        }
-      }
-      // Containers fill up
-      for (const it of items) {
-        const ct = it.spec.container; if (!ct || !it.liquid || it === d.src || ct.endless) continue;
-        const b = it.body; invQ.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w).invert();
-        lp.set(d.p.x - b.position.x, d.p.y - b.position.y, d.p.z - b.position.z).applyQuaternion(invQ).divideScalar(it.scale);
-        if (lp.y > ct.bottom && lp.y < ct.bottom + ct.h + 0.012 && Math.hypot(lp.x, lp.z) < ct.r * 1.05 && d.v.y < 0) {
-          const cap = ct.cap * it.scale ** 3;
-          if (it.fill < 1) {
-            it.liquidColor.lerp(new T.Color(L.color), 1 / Math.max(1, it.fill * cap + 1));
-            if (it.fill < 0.02 || !it.liquidKey) it.liquidKey = d.key;
-            it.fill = Math.min(1, it.fill + 1 / cap); updateLiquid(it);
-          }
-          dead = true; break;
-        }
-      }
-      // Splash off food and objects
-      if (!dead && d.bounces < 3) for (const it of items) {
-        if (it === d.src || it.spec.container) continue;
-        const b = it.body.position, rr = it.r * 0.85;
-        const dx = d.p.x - b.x, dy = d.p.y - b.y, dz = d.p.z - b.z;
-        if (dx * dx + dy * dy + dz * dz < rr * rr) {
-          n.set(dx, dy, dz).normalize();
-          const vn = d.v.dot(n); if (vn < 0) d.v.addScaledVector(n, -1.3 * vn);
-          d.v.multiplyScalar(0.35); d.p.set(b.x, b.y, b.z).addScaledVector(n, rr + 0.002); d.bounces++;
-          if (L.hot && performance.now() - lastSizzle > 150) { lastSizzle = performance.now(); sfx.sizzle(); }
-          break;
-        }
-      }
-    }
-    if (!dead) {
-      const sy = surfaceY(d.p.x, d.p.z, d.p.y + 0.05);
-      if (d.p.y < sy) {
-        dead = true;
-        if (!d.splash) {
-          if (!L.noPuddle) addPuddle(d.p.x, sy, d.p.z, d.key, dropArea(d.key));
-          const ns = L.visc > 2 ? 0 : (Math.random() < 0.4 ? 2 : 0);
-          for (let k = 0; k < ns; k++) drops.push({ p: new T.Vector3(d.p.x, sy + 0.002, d.p.z), v: new T.Vector3((Math.random() - 0.5) * 0.5, 0.35 + Math.random() * 0.4, (Math.random() - 0.5) * 0.5), key: d.key, life: 0.4, splash: true, stuck: null, bounces: 0 });
-        }
-      }
-    }
-    if (dead) drops.splice(i, 1);
-  }
-  // Draw drops grouped by liquid
-  const m4 = new T.Matrix4(), q = new T.Quaternion(), sc = new T.Vector3(), vn = new T.Vector3();
-  for (const k in dropMeshes) dropMeshes[k].count = 0;
-  for (const d of drops) {
-    const dm = dropMesh(d.key); if (dm.count >= LMAX) continue;
-    const L = LIQ[d.key], s = (d.splash ? 0.5 : 1) * L.size, sp = d.stuck ? 0 : d.v.length();
-    sc.set(s, s * (1 + Math.min(2.5, sp * 0.45 * (L.visc > 2 ? 1.8 : 1))), s);
-    if (d.stuck) sc.set(s * 1.4, s * 0.5, s * 1.4);
-    q.setFromUnitVectors(Y, sp > 1e-3 ? vn.copy(d.v).divideScalar(sp) : Y);
-    m4.compose(d.p, q, sc); dm.setMatrixAt(dm.count++, m4);
-  }
-  for (const k in dropMeshes) dropMeshes[k].instanceMatrix.needsUpdate = true;
-}
-
-/* Puddles: stay until cleared, merge, run downhill on the room scan and drip off edges */
-const puddles = [];
-const puddleMats = {};
-function puddleMat(key) { if (!puddleMats[key]) { const m = liquidMat(key); m.depthWrite = false; m.transparent = true; m.opacity = Math.min(LIQ[key].opacity, 0.92); puddleMats[key] = m; } return puddleMats[key]; }
-function blobGeo(seed) {
-  const g = new T.CircleGeometry(1, 40); g.rotateX(-Math.PI / 2);
-  const p = g.attributes.position;
-  for (let i = 1; i < p.count; i++) {
-    const x = p.getX(i), z = p.getZ(i), a = Math.atan2(z, x);
-    const k = 1 + 0.13 * Math.sin(a * 3 + seed) + 0.08 * Math.sin(a * 5 + seed * 2.3) + 0.05 * Math.sin(a * 9 + seed * 0.7);
-    p.setX(i, x * k); p.setZ(i, z * k);
-  }
-  return g;
-}
-function addPuddle(x, y, z, key, area) {
-  const now = performance.now();
-  if (now - lastSplash > 80) { lastSplash = now; LIQ[key].visc > 2 ? SOUNDS.soft(0.15) : sfx.splash(); }
-  if (LIQ[key].hot && now - lastSizzle > 200) { lastSizzle = now; sfx.sizzle(); }
-  for (const p of puddles) {
-    if (p.key === key && Math.abs(p.y - y) < 0.03 && Math.hypot(p.x - x, p.z - z) < p.r + 0.02) {
-      const a0 = p.area; p.area += area; const w = area / p.area;
-      p.x = lerp(p.x, x, w * 0.3); p.z = lerp(p.z, z, w * 0.3); p.grew = now;
-      return;
-    }
-  }
-  if (puddles.length >= 70) { // merge into the nearest puddle instead of piling up meshes
-    let best = null, bd = Infinity; for (const p of puddles) { const dd = Math.hypot(p.x - x, p.z - z); if (dd < bd) { bd = dd; best = p; } }
-    if (best) { best.area += area; return; }
-  }
-  const m = new T.Mesh(blobGeo(Math.random() * 10), puddleMat(key));
-  m.receiveShadow = true; m.renderOrder = 1; m.scale.set(0.005, 1, 0.005);
-  m.position.set(x, y + 0.0015, z);
-  scene.add(m);
-  puddles.push({ m, x, y, z, key, area, r: Math.sqrt(area / Math.PI), vx: 0, vz: 0, grew: now, drip: 0 });
-}
-function removePuddle(i) { scene.remove(puddles[i].m); puddles.splice(i, 1); }
-let lastMerge = 0;
-const lavaLight = new T.PointLight(0xff5a1a, 0, 1.2, 2); scene.add(lavaLight);
-function updatePuddles(dt, now) {
-  let lavaBest = null;
-  for (let i = puddles.length - 1; i >= 0; i--) {
-    const p = puddles[i], L = LIQ[p.key];
-    p.r = Math.sqrt(p.area / Math.PI);
-    // Flow downhill on real shapes
-    const e = 0.04, top = p.y + 0.06;
-    const gx = (surfaceY(p.x + e, p.z, top) - surfaceY(p.x - e, p.z, top)) / (2 * e);
-    const gz = (surfaceY(p.x, p.z + e, top) - surfaceY(p.x, p.z - e, top)) / (2 * e);
-    const slope = Math.hypot(gx, gz);
-    if (slope > 0.06 && slope < 6) { p.vx -= gx * 2.2 / L.visc * dt; p.vz -= gz * 2.2 / L.visc * dt; }
-    p.vx *= Math.pow(0.12, dt); p.vz *= Math.pow(0.12, dt);
-    const sp = Math.hypot(p.vx, p.vz);
-    if (sp > 0.25) { p.vx *= 0.25 / sp; p.vz *= 0.25 / sp; }
-    p.x += p.vx * dt; p.z += p.vz * dt;
-    const ny = surfaceY(p.x, p.z, p.y + 0.06);
-    if (ny > -Infinity) {
-      if (ny < p.y - 0.05) { // ran off an edge: becomes falling drops
-        const cnt = Math.min(20, Math.ceil(p.area / dropArea(p.key)));
-        for (let k = 0; k < cnt; k++) emitDrop(new T.Vector3(p.x, p.y + 0.004, p.z), new T.Vector3(p.vx + (Math.random() - 0.5) * 0.1, 0, p.vz + (Math.random() - 0.5) * 0.1), p.key, null);
-        p.area -= cnt * dropArea(p.key);
-      } else p.y = lerp(p.y, ny, 0.3);
-    }
-    // Drip off edges the puddle reaches
-    const dirx = sp > 0.01 ? p.vx / sp : 0, dirz = sp > 0.01 ? p.vz / sp : 0;
-    if (sp > 0.01) {
-      const ax = p.x + dirx * p.r, az = p.z + dirz * p.r, ay = surfaceY(ax, az, p.y + 0.05);
-      if (ay < p.y - 0.04) {
-        p.drip += dt * 25 * Math.min(1, p.r / 0.04) / L.visc;
-        while (p.drip >= 1 && p.area > dropArea(p.key) * 2) { p.drip--; p.area -= dropArea(p.key); emitDrop(new T.Vector3(ax, p.y + 0.003, az), new T.Vector3(dirx * 0.15, 0, dirz * 0.15), p.key, null); }
-      }
-    }
-    if (p.area < dropArea(p.key) * 0.5) { removePuddle(i); continue; }
-    p.m.position.set(p.x, p.y + 0.0015 + (i % 7) * 0.0002, p.z);
-    const s = lerp(p.m.scale.x, p.r, 0.12); p.m.scale.set(s, 1, s);
-    // Steam, fizz and glow
-    if (L.steam && Math.random() < L.steam * dt * Math.min(2, p.r / 0.03)) puff(p.x + (Math.random() - 0.5) * p.r, p.y + 0.005, p.z + (Math.random() - 0.5) * p.r, 'steam');
-    if (L.fizz && now - p.grew < 3000 && Math.random() < 8 * dt) puff(p.x + (Math.random() - 0.5) * p.r, p.y + 0.002, p.z + (Math.random() - 0.5) * p.r, 'fizz');
-    if (L.hot && (!lavaBest || p.r > lavaBest.r)) lavaBest = p;
-    // Your hand splashes puddles
-    if (hand.enabled && hand.lm && handTips.active) {
-      for (const tp of handTips.pts) {
-        if (Math.hypot(tp.p.x - p.x, tp.p.z - p.z) < p.r && Math.abs(tp.p.y - p.y) < 0.03 && tp.v.length() > 0.3 && Math.random() < 0.6) {
-          for (let k = 0; k < 2; k++) emitDrop(new T.Vector3(tp.p.x, p.y + 0.005, tp.p.z), new T.Vector3(tp.v.x * 0.6 + (Math.random() - 0.5) * 0.3, 0.5 + Math.random() * 0.5, tp.v.z * 0.6 + (Math.random() - 0.5) * 0.3), p.key, null);
-          p.area = Math.max(0, p.area - dropArea(p.key) * 1.5);
-          p.vx += tp.v.x * 0.05; p.vz += tp.v.z * 0.05;
-        }
-      }
-    }
-  }
-  if (lavaBest) { lavaLight.position.set(lavaBest.x, lavaBest.y + 0.08, lavaBest.z); lavaLight.intensity = Math.min(3, lavaBest.r * 25) * (0.85 + Math.random() * 0.15); }
-  else lavaLight.intensity = 0;
-  // Merge touching puddles
-  if (now - lastMerge > 400) {
-    lastMerge = now;
-    for (let i = puddles.length - 1; i >= 0; i--) for (let j = i - 1; j >= 0; j--) {
-      const a = puddles[i], b = puddles[j];
-      if (Math.abs(a.y - b.y) < 0.03 && Math.hypot(a.x - b.x, a.z - b.z) < (a.r + b.r) * 0.75) {
-        const big = a.area >= b.area ? a : b, small = big === a ? b : a, tot = a.area + b.area;
-        big.x = (a.x * a.area + b.x * b.area) / tot; big.z = (a.z * a.area + b.z * b.area) / tot; big.area = tot;
-        removePuddle(puddles.indexOf(small)); break;
-      }
-    }
-  }
-  updatePuffs(dt);
-}
-/* Steam and fizz puffs */
-const puffs = [];
-let puffTex = null;
-function puff(x, y, z, kind) {
-  if (puffs.length > 90) return;
-  if (!puffTex) {
-    const cv = document.createElement('canvas'); cv.width = cv.height = 64; const g = cv.getContext('2d');
-    const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
-    g.fillStyle = gr; g.fillRect(0, 0, 64, 64); puffTex = new T.CanvasTexture(cv);
-  }
-  const sp = new T.Sprite(new T.SpriteMaterial({ map: puffTex, transparent: true, depthWrite: false, opacity: kind === 'steam' ? 0.25 : 0.8, color: kind === 'steam' ? 0xffffff : 0xfff6e8 }));
-  const s = kind === 'steam' ? 0.03 : 0.006; sp.scale.set(s, s, s); sp.position.set(x, y, z);
-  scene.add(sp); puffs.push({ sp, kind, life: kind === 'steam' ? 1.8 : 0.6, max: kind === 'steam' ? 1.8 : 0.6, vy: kind === 'steam' ? 0.12 : 0.08 });
-}
-function updatePuffs(dt) {
-  for (let i = puffs.length - 1; i >= 0; i--) {
-    const p = puffs[i]; p.life -= dt; p.sp.position.y += p.vy * dt;
-    const t = 1 - p.life / p.max;
-    if (p.kind === 'steam') { const s = 0.03 + t * 0.07; p.sp.scale.set(s, s, s); p.sp.material.opacity = 0.25 * (1 - t); p.sp.position.x += (Math.random() - 0.5) * 0.01; }
-    else p.sp.material.opacity = 0.8 * (1 - t);
-    if (p.life <= 0) { scene.remove(p.sp); p.sp.material.dispose(); puffs.splice(i, 1); }
-  }
-}
-function updatePouring(dt) {
-  let any = false;
-  const up = new T.Vector3(), down = new T.Vector3(0, -1, 0);
-  for (const it of items) {
-    const ct = it.spec.container; if (!ct || it.fill <= 0.001 || !it.opened || !it.liquidKey) continue;
-    const b = it.body; const q = new T.Quaternion(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
-    up.copy(Y).applyQuaternion(q);
-    const thresh = ct.bowl ? 0.55 : 0.25;
-    if (up.y > thresh) continue;
-    any = true;
-    const L = LIQ[it.liquidKey];
-    const rate = clamp((thresh - up.y) / 0.7, 0.15, 1) * 110 * Math.min(2, it.scale) / Math.sqrt(L.visc);
-    it.pourAcc = (it.pourAcc || 0) + rate * dt;
-    const perp = down.clone().sub(up.clone().multiplyScalar(up.dot(down))); if (perp.lengthSq() < 1e-6) perp.set(1, 0, 0); perp.normalize();
-    const top = new T.Vector3(b.position.x, b.position.y, b.position.z).addScaledVector(up, (ct.bottom + ct.h + 0.004) * it.scale).addScaledVector(perp, ct.rim * it.scale);
-    const cap = ct.cap * it.scale ** 3;
-    while (it.pourAcc >= 1 && it.fill > 0) {
-      it.pourAcc -= 1;
-      const v = new T.Vector3(b.velocity.x, b.velocity.y, b.velocity.z).addScaledVector(perp, 0.35 / Math.pow(L.visc, 0.4)).addScaledVector(up, 0.12);
-      v.x += (Math.random() - 0.5) * 0.05; v.z += (Math.random() - 0.5) * 0.05;
-      emitDrop(top.clone().addScaledVector(perp, Math.random() * 0.003), v, it.liquidKey, it);
-      if (!ct.endless) it.fill = Math.max(0, it.fill - 1 / cap);
-    }
-    updateLiquid(it);
-    if (it.spec === SPECS.soda && it.fill <= 0.001) { it.body.mass = 0.02 * it.scale ** 3; it.body.updateMassProperties(); }
-  }
-  setPourSound(any);
-}
+function updatePouring() {}
 
 /* Shattering */
 function shatter(it) {
@@ -1441,7 +1137,6 @@ function shatter(it) {
   const mat = isGlass ? M.glass() : (it.spec === SPECS.bowl ? M.ceramicBlue() : M.ceramic());
   const pos = new T.Vector3(b.position.x, b.position.y, b.position.z);
   const vel = new T.Vector3(b.velocity.x, b.velocity.y, b.velocity.z);
-  if (it.fill > 0.02 && it.liquidKey) { for (let k = 0; k < Math.round(it.fill * 60); k++) emitDrop(pos, new T.Vector3((Math.random() - 0.5) * 1.2, Math.random() * 0.8, (Math.random() - 0.5) * 1.2), it.liquidKey, null); }
   removeItem(it);
   sfx.shatter(); buzz(40);
   const n = 9;
@@ -1497,18 +1192,13 @@ function openCan(it) {
   it.mesh.traverse(o => { if (o.userData.hole) o.visible = true; });
   const b = it.body, up = Y.clone().applyQuaternion(bodyQuat(b));
   const top = bodyPos(b).addScaledVector(up, 0.062 * it.scale);
-  for (let k = 0; k < 14; k++) emitDrop(top, up.clone().multiplyScalar(0.6 + Math.random() * 0.5).add(new T.Vector3((Math.random() - 0.5) * 0.3, 0, (Math.random() - 0.5) * 0.3)), 'foam', it);
-  showHint('Opened! Tilt it to pour, or bring it to the camera to drink', 2400);
+  showHint('Opened! Bring it to the camera to drink', 2000);
 }
 function tap(it) {
   const sp = it.spec, b = it.body; b.wakeUp();
   if (sp.edible) { bite(it); return; }
   if (sp === SPECS.soda) { if (!it.opened) openCan(it); else pokeIt(it, 1.0); return; }
-  if (sp === SPECS.jug) {
-    const k = LIQ_ORDER[(LIQ_ORDER.indexOf(it.liquidKey) + 1) % LIQ_ORDER.length];
-    it.liquidKey = k; it.liquidColor.set(LIQ[k].color); updateLiquid(it);
-    sfx.place(); buzz(12); showHint(`${LIQ[k].emoji} ${LIQ[k].name}. Tilt the jug to pour`, 1600); return;
-  }
+
   if (sp.kind === 'ball') { SOUNDS.bounce(0.7); sfx.boing(); buzz(15); pokeIt(it, 0.6); b.velocity.y += 2.6; return; }
   if (sp === SPECS.domino) { const d = forwardFlat(); b.applyImpulse(new C.Vec3(d.x * 0.02, 0, d.z * 0.02), new C.Vec3(b.position.x, b.position.y + 0.04 * it.scale, b.position.z)); buzz(10); return; }
   pokeIt(it, sp === SPECS.bowling ? 1.6 : 1.1);
@@ -1545,13 +1235,13 @@ function flick(it, dir) {
 }
 function placeAtReticle(sx, sy) {
   let p = null, onScan = false;
-  if (sx !== undefined && haveCam) { p = hfRay(camPos, screenRay(sx, sy)); onScan = !!p; }
+  if (sx !== undefined && haveCam) { p = voxRay(camPos, screenRay(sx, sy)); onScan = !!p; }
   if (!p) {
     if (!reticle.visible) { showHint('No surface yet. Move your phone slowly over the floor or a table', 1800); return; }
     p = new T.Vector3().setFromMatrixPosition(reticle.matrix);
-    onScan = hfGet(p.x, p.z) !== null;
+    onScan = voxSurfaceY(p.x, p.z, p.y + 0.1) !== null;
   }
-  if (!onScan) { ensureSlab(p.x, p.y, p.z); if (HF.inWorld) showHint('Scanning… move your phone around here so it lands on the real shape', 2200); }
+  if (!onScan) { ensureSlab(p.x, p.y, p.z); if (voxReady()) showHint('Scanning… move your phone around here so it lands on the real shape', 2200); }
   const sc = SIZES[sizeIdx].s, spec = SPECS[selected];
   const fwd = new T.Vector3(p.x - camPos.x, 0, p.z - camPos.z); if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); fwd.normalize();
   sfx.place(); buzz(12);
@@ -1623,7 +1313,7 @@ function updateHeld(dt, now) {
   if (toCam < 0.17 && inFront && now - lastEat > 650) {
     lastEat = now;
     if (it.spec.edible) { const n = bite(it); if (held && held.mode === 'phone') { held.len = held.baseLen = 0.3; held.local.setLength(0.3); held.startY = held.curY; } if (!n) held = null; }
-    else if (it.spec.container && it.spec === SPECS.soda || (it.spec.container && it.fill > 0.01)) { sip(it); if (held && held.mode === 'phone') { held.len = held.baseLen = 0.3; held.local.setLength(0.3); held.startY = held.curY; } }
+    else if (it.spec === SPECS.soda) { sip(it); if (held && held.mode === 'phone') { held.len = held.baseLen = 0.3; held.local.setLength(0.3); held.startY = held.curY; } }
   }
 }
 function snapHeld() {
@@ -1662,166 +1352,206 @@ function pickRay(dir, maxDist = 6) {
 }
 function pickScreen(x, y) { if (!haveCam) return null; const r = pickRay(screenRay(x, y)); return r ? r.it : null; }
 
-/* ============================== Depth: live room scan (real shapes) ============================== */
-// A height grid of your room, filled in from the depth sensor. Objects collide with it, so they
-// settle into couch cushions, roll down slopes, sit on top of real things and stop at walls.
-const UNKNOWN = -20;
-const HF = { N: 160, es: 0.04, x0: 0, z0: 0, data: null, known: null, shape: null, body: null, geo: null, vis: null, shadow: null,
-  lastScan: 0, lastVis: 0, lastNormals: 0, lastSlabCheck: 0, visDirty: false, inWorld: false };
-function hfIndex(x, z) {
-  const i = Math.round((x - HF.x0) / HF.es), j = Math.round((HF.z0 - z) / HF.es);
-  return (i < 0 || j < 0 || i > HF.N || j > HF.N) ? null : [i, j];
-}
-function hfGet(x, z) {
-  if (!HF.inWorld) return null;
-  const c = hfIndex(x, z); if (!c) return null;
-  return HF.known[c[0] * (HF.N + 1) + c[1]] ? HF.data[c[0]][c[1]] : null;
-}
-function initHF() {
-  if (HF.data || floorY === null) return;
-  const N = HF.N, es = HF.es;
-  HF.x0 = camPos.x - N * es / 2; HF.z0 = camPos.z + N * es / 2;
-  HF.data = []; for (let i = 0; i <= N; i++) { const row = new Array(N + 1).fill(UNKNOWN); HF.data.push(row); }
-  HF.known = new Uint8Array((N + 1) * (N + 1));
-  HF.shape = new C.Heightfield(HF.data, { elementSize: es });
-  HF.body = new C.Body({ mass: 0, material: groundMat });
-  HF.body.addShape(HF.shape);
-  HF.body.position.set(HF.x0, 0, HF.z0);
-  HF.body.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-  // Visual mesh (wireframe when "Show room scan" is on) + a shadow catcher on the real shapes
-  const V = (N + 1) * (N + 1), pos = new Float32Array(V * 3), col = new Float32Array(V * 4), idx = new Uint32Array(N * N * 6);
-  for (let i = 0; i <= N; i++) for (let j = 0; j <= N; j++) {
-    const v = i * (N + 1) + j;
-    pos[v * 3] = HF.x0 + i * es; pos[v * 3 + 1] = floorY; pos[v * 3 + 2] = HF.z0 - j * es;
-    col[v * 4] = 0.1; col[v * 4 + 1] = 0.9; col[v * 4 + 2] = 1; col[v * 4 + 3] = 0;
+/* ============================== Depth: true 3D room scan ============================== */
+// The room is mapped as 3 cm cubes in full 3D, in chunks that load around you as you move.
+// Each cube collects "seen solid" and "seen through" votes from the depth sensor, so noise and
+// people walking past clear out. Solid cubes merge into larger boxes for the physics engine.
+const VS = 0.03, CS = 16, CW = VS * CS, CN = CS * CS * CS;
+const HIT = 0.6, MISS = -0.3, THR = 0.9, OMAX = 3.5, OMIN = -2;
+const VOX = { chunks: new Map(), y0: null, enabled: true, lastScan: 0, lastBuild: 0, maskData: null };
+const ckey = (cx, cy, cz) => ((cx + 512) * 1024 + (cy + 512)) * 1024 + (cz + 512);
+const vIdx = (lx, ly, lz) => lx + CS * (lz + CS * ly);
+let _cc = null, _ck = NaN;
+function chunkFor(ix, iy, iz, create) {
+  const cx = Math.floor(ix / CS), cy = Math.floor(iy / CS), cz = Math.floor(iz / CS), k = ckey(cx, cy, cz);
+  if (k === _ck && _cc) return _cc;
+  let c = VOX.chunks.get(k);
+  if (!c && create) {
+    c = { k, cx, cy, cz, occ: new Float32Array(CN), dirty: false, built: 0, body: null, shadow: null, vis: null };
+    VOX.chunks.set(k, c);
   }
-  let k = 0;
-  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
-    const a = i * (N + 1) + j, b = a + N + 1;
-    idx[k++] = a; idx[k++] = a + 1; idx[k++] = b; idx[k++] = b; idx[k++] = a + 1; idx[k++] = b + 1;
-  }
-  HF.geo = new T.BufferGeometry();
-  HF.geo.setAttribute('position', new T.BufferAttribute(pos, 3).setUsage(T.DynamicDrawUsage));
-  HF.geo.setAttribute('color', new T.BufferAttribute(col, 4).setUsage(T.DynamicDrawUsage));
-  HF.geo.setIndex(new T.BufferAttribute(idx, 1));
-  HF.geo.computeVertexNormals();
-  HF.vis = new T.Mesh(HF.geo, new T.MeshBasicMaterial({ vertexColors: true, transparent: true, wireframe: true, depthWrite: false }));
-  HF.vis.frustumCulled = false; HF.vis.visible = opts.showScan; HF.vis.renderOrder = 3;
-  HF.shadow = new T.Mesh(HF.geo, shadowMat);
-  HF.shadow.receiveShadow = true; HF.shadow.frustumCulled = false; HF.shadow.position.y = 0.002;
-  scene.add(HF.vis, HF.shadow);
-  if (opts.obstacles) hfAddToWorld();
+  if (c) { _cc = c; _ck = k; }
+  return c || null;
 }
-function hfAddToWorld() {
-  if (!HF.body || HF.inWorld) return;
-  world.addBody(HF.body); HF.inWorld = true;
-  if (floorShadow) floorShadow.visible = false;
-  HF.shadow.visible = true;
+function voxIndexOf(x, y, z) { return [Math.floor(x / VS), Math.floor((y - VOX.y0) / VS), Math.floor(z / VS)]; }
+function voxSolidIdx(ix, iy, iz) {
+  const c = chunkFor(ix, iy, iz, false); if (!c) return false;
+  return c.occ[vIdx(ix - c.cx * CS, iy - c.cy * CS, iz - c.cz * CS)] > THR;
 }
-function hfRemoveFromWorld() {
-  if (!HF.body || !HF.inWorld) return;
-  world.removeBody(HF.body); HF.inWorld = false;
-  if (floorShadow) floorShadow.visible = true;
-  HF.shadow.visible = false; HF.vis.visible = false;
-  for (const it of items) it.body.wakeUp();
+function voxVote(x, y, z, delta) {
+  const ix = Math.floor(x / VS), iy = Math.floor((y - VOX.y0) / VS), iz = Math.floor(z / VS);
+  const c = chunkFor(ix, iy, iz, delta > 0); if (!c) return;
+  const i = vIdx(ix - c.cx * CS, iy - c.cy * CS, iz - c.cz * CS), old = c.occ[i];
+  const nv = old + delta > OMAX ? OMAX : old + delta < OMIN ? OMIN : old + delta;
+  if (nv === old) return;
+  c.occ[i] = nv;
+  if ((old > THR) !== (nv > THR)) c.dirty = true;
 }
-function hfSet(i, j, v, box) {
-  const N1 = HF.N + 1;
-  if (typeof HF.shape.setHeightValueAtIndex === 'function') HF.shape.setHeightValueAtIndex(i, j, v);
-  else { HF.data[i][j] = v; HF.shape._cachedPillars = {}; }
-  const vi = i * N1 + j;
-  HF.known[vi] = 1;
-  const pos = HF.geo.attributes.position.array, col = HF.geo.attributes.color.array;
-  pos[vi * 3 + 1] = v; col[vi * 4 + 3] = 0.55;
-  HF.visDirty = true;
-  const x = HF.x0 + i * HF.es, z = HF.z0 - j * HF.es;
-  box.minX = Math.min(box.minX, x); box.maxX = Math.max(box.maxX, x); box.minZ = Math.min(box.minZ, z); box.maxZ = Math.max(box.maxZ, z); box.n++;
+function voxReady() { return VOX.enabled && VOX.y0 !== null && VOX.chunks.size > 0; }
+// Highest solid surface under (x,z) below a height (top of a cube is taken at its middle, which averages out the 3 cm steps)
+function voxSurfaceY(x, z, below) {
+  if (!voxReady() || floorY === null) return null;
+  const ix = Math.floor(x / VS), iz = Math.floor(z / VS);
+  let iy = Math.floor((Math.min(below, floorY + 2.5) - VOX.y0) / VS) - 1;
+  const iyMin = Math.floor((floorY - VOX.y0) / VS);
+  for (; iy >= iyMin; iy--) if (voxSolidIdx(ix, iy, iz)) return VOX.y0 + (iy + 0.5) * VS;
+  return null;
 }
-function scanRoom(info, now) {
-  if (!opts.obstacles || floorY === null) return;
-  initHF(); if (!HF.inWorld) hfAddToWorld();
-  if (now - HF.lastScan < 120) return;
-  HF.lastScan = now;
-  const es = HF.es, N1 = HF.N + 1;
-  const fwd = new T.Vector3(0, 0, -1).applyQuaternion(camQuat);
-  const box = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity, n: 0 };
-  const GX = 16, GY = 26, q = new T.Vector3();
-  for (let gy = 0; gy < GY; gy++) for (let gx = 0; gx < GX; gx++) {
-    const nx = (gx + 0.3 + Math.random() * 0.4) / GX, ny = (gy + 0.3 + Math.random() * 0.4) / GY;
-    let d; try { d = info.getDepthInMeters(nx, ny); } catch (e) { return; }
-    if (!(d > 0.15 && d < 3.5)) continue;
-    const dir = ndcRay(nx * 2 - 1, 1 - ny * 2), cosA = dir.dot(fwd);
-    if (cosA < 0.2) continue;
-    const dist = d / cosA;
-    // Carve: the ray reached this far, so nothing solid sits above its path
-    for (let st = 0.15; st < dist - 0.07; st += es * 0.9) {
-      q.copy(camPos).addScaledVector(dir, st);
-      const c = hfIndex(q.x, q.z); if (!c) continue;
-      const vi = c[0] * N1 + c[1];
-      if (HF.known[vi]) { const h = HF.data[c[0]][c[1]]; if (h > q.y + 0.03 && q.y > floorY - 0.03) hfSet(c[0], c[1], Math.max(floorY - 0.02, q.y), box); }
-    }
-    // Add the surface point
-    q.copy(camPos).addScaledVector(dir, dist);
-    if (q.y < floorY - 0.08 || q.y > floorY + 2.3) continue;
-    const c = hfIndex(q.x, q.z); if (!c) continue;
-    const vi = c[0] * N1 + c[1];
-    if (!HF.known[vi]) hfSet(c[0], c[1], q.y, box);
-    else {
-      const h = HF.data[c[0]][c[1]];
-      if (q.y > h + 0.005) hfSet(c[0], c[1], h + (q.y - h) * 0.5, box);
-      else if (q.y > h - 0.05 && q.y < h - 0.005) hfSet(c[0], c[1], h + (q.y - h) * 0.25, box);
-    }
-  }
-  if (box.n) {
-    HF.shape.updateMaxValue && HF.shape.updateMaxValue();
-    HF.shape.updateBoundingSphereRadius && HF.shape.updateBoundingSphereRadius();
-    HF.body.updateBoundingRadius && HF.body.updateBoundingRadius();
-    HF.body.aabbNeedsUpdate = true;
-    // Wake anything resting where the scan changed so it re-settles on the real shape
-    for (const it of items) {
-      const p = it.body.position, m = it.r + 0.1;
-      if (p.x > box.minX - m && p.x < box.maxX + m && p.z > box.minZ - m && p.z < box.maxZ + m) it.body.wakeUp();
-    }
-  }
-  // Once a table/couch area is scanned, drop the temporary flat slab there
-  if (now - HF.lastSlabCheck > 800) {
-    HF.lastSlabCheck = now;
-    for (let k = slabs.length - 1; k >= 0; k--) {
-      const sl = slabs[k]; let tot = 0, kn = 0;
-      for (let x = sl.x - sl.half; x <= sl.x + sl.half; x += 0.08) for (let z = sl.z - sl.half; z <= sl.z + sl.half; z += 0.08) {
-        const c = hfIndex(x, z); if (!c) continue; tot++;
-        if (HF.known[c[0] * N1 + c[1]]) { const h = HF.data[c[0]][c[1]]; if (Math.abs(h - sl.y) < 0.25) kn++; }
-      }
-      if (tot && kn / tot > 0.45) {
-        world.removeBody(sl.body); scene.remove(sl.mesh); slabs.splice(k, 1);
-        for (const it of items) { const p = it.body.position; if (Math.abs(p.x - sl.x) < sl.half + 0.2 && Math.abs(p.z - sl.z) < sl.half + 0.2) it.body.wakeUp(); }
-      }
-    }
-  }
-  if (HF.visDirty && now - HF.lastVis > 250) {
-    HF.lastVis = now; HF.visDirty = false;
-    HF.geo.attributes.position.needsUpdate = true; HF.geo.attributes.color.needsUpdate = true;
-    if (now - HF.lastNormals > 1000) { HF.lastNormals = now; HF.geo.computeVertexNormals(); }
-  }
-}
-// March a ray through the scanned room; returns the first point where it meets a real surface
-function hfRay(o, d, maxDist = 4) {
-  if (!HF.inWorld) return null;
-  const q = new T.Vector3(); let prev = 0.1;
-  for (let st = 0.1; st < maxDist; st += 0.02) {
+function voxRay(o, d, maxDist = 4) {
+  if (!voxReady()) return null;
+  const q = new T.Vector3();
+  for (let st = 0.1; st < maxDist; st += 0.015) {
     q.copy(o).addScaledVector(d, st);
-    const h = hfGet(q.x, q.z);
-    if (h !== null && q.y <= h) {
-      let a = prev, b = st;
-      for (let k = 0; k < 6; k++) { const m = (a + b) / 2; q.copy(o).addScaledVector(d, m); const hm = hfGet(q.x, q.z); if (hm !== null && q.y <= hm) b = m; else a = m; }
-      q.copy(o).addScaledVector(d, b);
-      const hh = hfGet(q.x, q.z); if (hh !== null) q.y = hh;
-      return q.clone();
+    const ix = Math.floor(q.x / VS), iy = Math.floor((q.y - VOX.y0) / VS), iz = Math.floor(q.z / VS);
+    if (voxSolidIdx(ix, iy, iz)) {
+      // hitting a cube from above → land on its (averaged) top
+      if (d.y < -0.2 && !voxSolidIdx(ix, iy + 1, iz)) q.y = VOX.y0 + (iy + 0.5) * VS;
+      else q.addScaledVector(d, -0.02);
+      return q;
     }
-    prev = st;
   }
   return null;
 }
+function inHandMask(nx, ny) {
+  const m = VOX.maskData; if (!m) return false;
+  const x = Math.floor(nx * m.width), y = Math.floor(ny * m.height);
+  return m.data[(y * m.width + x) * 4] > 20;
+}
+function scanRoom(info, now) {
+  if (!VOX.enabled || floorY === null || now - VOX.lastScan < 140) return;
+  VOX.lastScan = now;
+  if (VOX.y0 === null) VOX.y0 = floorY + 0.025;
+  VOX.maskData = (hand.enabled && hand.lm && maskCv.width) ? maskCtx.getImageData(0, 0, maskCv.width, maskCv.height) : null;
+  const fwd = new T.Vector3(0, 0, -1).applyQuaternion(camQuat), q = new T.Vector3();
+  const GX = 18, GY = 30;
+  _ck = NaN; _cc = null;
+  for (let gy = 0; gy < GY; gy++) for (let gx = 0; gx < GX; gx++) {
+    const nx = (gx + 0.2 + Math.random() * 0.6) / GX, ny = (gy + 0.2 + Math.random() * 0.6) / GY;
+    if (inHandMask(nx, ny)) continue; // never map your own hand
+    let d; try { d = info.getDepthInMeters(nx, ny); } catch (e) { return; }
+    if (!(d > 0.15 && d < 3.0)) continue;
+    const dir = ndcRay(nx * 2 - 1, 1 - ny * 2), cosA = dir.dot(fwd);
+    if (cosA < 0.2) continue;
+    const dist = d / cosA, w = d > 2 ? 0.6 : 1;
+    // seen through: free space along the ray
+    for (let st = 0.12; st < dist - VS * 1.5; st += VS) { q.copy(camPos).addScaledVector(dir, st); voxVote(q.x, q.y, q.z, MISS); }
+    // seen solid: the surface point (floor itself is handled by the floor plane)
+    q.copy(camPos).addScaledVector(dir, dist);
+    if (q.y < floorY + 0.025 || q.y > floorY + 2.5) continue;
+    voxVote(q.x, q.y, q.z, HIT * w);
+  }
+  // drop far-away chunks so the scan follows you
+  if (VOX.chunks.size > 520) {
+    const arr = [...VOX.chunks.values()].map(c => ({ c, d: Math.hypot((c.cx + 0.5) * CW - camPos.x, (c.cz + 0.5) * CW - camPos.z) })).sort((a, b) => b.d - a.d);
+    for (let i = 0; i < 60; i++) dropChunk(arr[i].c);
+  }
+  // once a table/couch area is mapped, remove its temporary flat slab
+  for (let k = slabs.length - 1; k >= 0; k--) {
+    const sl = slabs[k]; let tot = 0, kn = 0;
+    for (let x = sl.x - sl.half; x <= sl.x + sl.half; x += 0.09) for (let z = sl.z - sl.half; z <= sl.z + sl.half; z += 0.09) {
+      tot++; const h = voxSurfaceY(x, z, sl.y + 0.15); if (h !== null && Math.abs(h - sl.y) < 0.12) kn++;
+    }
+    if (tot && kn / tot > 0.4) {
+      world.removeBody(sl.body); scene.remove(sl.mesh); slabs.splice(k, 1);
+      for (const it of items) { const p = it.body.position; if (Math.abs(p.x - sl.x) < sl.half + 0.2 && Math.abs(p.z - sl.z) < sl.half + 0.2) it.body.wakeUp(); }
+    }
+  }
+}
+function dropChunk(c) {
+  if (c.body) world.removeBody(c.body);
+  if (c.shadow) { scene.remove(c.shadow); c.shadow.geometry.dispose(); }
+  if (c.vis) { scene.remove(c.vis); c.vis.geometry.dispose(); }
+  VOX.chunks.delete(c.k); _ck = NaN; _cc = null;
+}
+const voxVisMat = new T.MeshBasicMaterial({ color: 0x22e0ff, transparent: true, opacity: 0.35, depthWrite: false });
+const voxVisGeo = new T.BoxGeometry(VS * 0.92, VS * 0.92, VS * 0.92);
+function rebuildChunk(c, now) {
+  c.dirty = false; c.built = now;
+  if (c.body) { world.removeBody(c.body); c.body = null; }
+  if (c.shadow) { scene.remove(c.shadow); c.shadow.geometry.dispose(); c.shadow = null; }
+  if (c.vis) { scene.remove(c.vis); c.vis.geometry.dispose(); c.vis = null; }
+  const raw = i => c.occ[i] > THR;
+  const solid = new Uint8Array(CN);
+  for (let ly = 0; ly < CS; ly++) for (let lz = 0; lz < CS; lz++) for (let lx = 0; lx < CS; lx++) {
+    const i = vIdx(lx, ly, lz);
+    if (raw(i)) { solid[i] = 1; continue; }
+    // fill single-cube holes in a surface
+    if (lx > 0 && lx < CS - 1 && lz > 0 && lz < CS - 1 && raw(vIdx(lx - 1, ly, lz)) && raw(vIdx(lx + 1, ly, lz)) && raw(vIdx(lx, ly, lz - 1)) && raw(vIdx(lx, ly, lz + 1))) solid[i] = 2;
+  }
+  const ox = c.cx * CW, oy = VOX.y0 + c.cy * CW, oz = c.cz * CW;
+  // Greedy merge solid cubes into boxes
+  const used = new Uint8Array(CN), boxes = [];
+  for (let ly = 0; ly < CS; ly++) for (let lz = 0; lz < CS; lz++) for (let lx = 0; lx < CS; lx++) {
+    const i0 = vIdx(lx, ly, lz); if (!solid[i0] || used[i0]) continue;
+    let x1 = lx; while (x1 + 1 < CS && solid[vIdx(x1 + 1, ly, lz)] && !used[vIdx(x1 + 1, ly, lz)]) x1++;
+    let z1 = lz;
+    zext: while (z1 + 1 < CS) { for (let x = lx; x <= x1; x++) { const j = vIdx(x, ly, z1 + 1); if (!solid[j] || used[j]) break zext; } z1++; }
+    let y1 = ly;
+    yext: while (y1 + 1 < CS) { for (let z = lz; z <= z1; z++) for (let x = lx; x <= x1; x++) { const j = vIdx(x, y1 + 1, z); if (!solid[j] || used[j]) break yext; } y1++; }
+    for (let y = ly; y <= y1; y++) for (let z = lz; z <= z1; z++) for (let x = lx; x <= x1; x++) used[vIdx(x, y, z)] = 1;
+    boxes.push([lx, ly, lz, x1, y1, z1]);
+  }
+  if (boxes.length) {
+    const body = new C.Body({ mass: 0, material: groundMat });
+    for (const [x0, y0, z0, x1, y1, z1] of boxes) {
+      // the top of a box sits at the middle of its top cube (unbiased surface height)
+      const topCut = voxSolidIdx(c.cx * CS + x0, c.cy * CS + y1 + 1, c.cz * CS + z0) ? 0 : VS * 0.5;
+      const hx = (x1 - x0 + 1) * VS / 2, hz = (z1 - z0 + 1) * VS / 2, hy = Math.max(VS * 0.25, ((y1 - y0 + 1) * VS - topCut) / 2);
+      body.addShape(new C.Box(new C.Vec3(hx, hy, hz)), new C.Vec3(x0 * VS + hx, y0 * VS + hy, z0 * VS + hz));
+    }
+    body.position.set(ox, oy, oz);
+    if (VOX.enabled) world.addBody(body);
+    c.body = body;
+  }
+  // Shadow catcher on top faces (so shadows fall on real furniture) + optional cube view
+  const pos = [], idx = [], visList = [];
+  for (let ly = 0; ly < CS; ly++) for (let lz = 0; lz < CS; lz++) for (let lx = 0; lx < CS; lx++) {
+    const i = vIdx(lx, ly, lz); if (!solid[i]) continue;
+    const gx = c.cx * CS + lx, gy = c.cy * CS + ly, gz = c.cz * CS + lz;
+    const aboveFree = !voxSolidIdx(gx, gy + 1, gz) && !(ly + 1 < CS && solid[vIdx(lx, ly + 1, lz)]);
+    const y = oy + (ly + 0.5) * VS;
+    if (aboveFree && y > floorY + 0.04) {
+      const x = ox + lx * VS, z = oz + lz * VS, n = pos.length / 3;
+      pos.push(x, y + 0.002, z, x + VS, y + 0.002, z, x, y + 0.002, z + VS, x + VS, y + 0.002, z + VS);
+      idx.push(n, n + 2, n + 1, n + 1, n + 2, n + 3);
+    }
+    if (opts.showScan && visList.length < 2500) {
+      const surf = aboveFree || !voxSolidIdx(gx + 1, gy, gz) || !voxSolidIdx(gx - 1, gy, gz) || !voxSolidIdx(gx, gy, gz + 1) || !voxSolidIdx(gx, gy, gz - 1);
+      if (surf) visList.push(ox + (lx + 0.5) * VS, oy + (ly + 0.5) * VS, oz + (lz + 0.5) * VS);
+    }
+  }
+  if (pos.length) {
+    const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+    c.shadow = new T.Mesh(g, shadowMat); c.shadow.receiveShadow = true; scene.add(c.shadow);
+  }
+  if (visList.length) {
+    const n = visList.length / 3, im = new T.InstancedMesh(voxVisGeo, voxVisMat, n), m4 = new T.Matrix4();
+    for (let k = 0; k < n; k++) { m4.makeTranslation(visList[k * 3], visList[k * 3 + 1], visList[k * 3 + 2]); im.setMatrixAt(k, m4); }
+    im.frustumCulled = false; c.vis = im; scene.add(im);
+  }
+  // wake things resting here so they settle onto the new shape
+  for (const it of items) {
+    const p = it.body.position;
+    if (p.x > ox - 0.2 && p.x < ox + CW + 0.2 && p.z > oz - 0.2 && p.z < oz + CW + 0.2 && p.y > oy - 0.3 && p.y < oy + CW + 0.3) it.body.wakeUp();
+  }
+}
+function updateVoxels(now) {
+  if (!VOX.enabled) return;
+  let n = 0;
+  for (const c of VOX.chunks.values()) {
+    if (c.dirty && now - c.built > 450) { rebuildChunk(c, now); if (++n >= 2) break; }
+  }
+}
+function setVoxEnabled(on) {
+  VOX.enabled = on;
+  for (const c of VOX.chunks.values()) {
+    if (c.body) { if (on) world.addBody(c.body); else world.removeBody(c.body); }
+    if (c.shadow) c.shadow.visible = on;
+    if (c.vis) c.vis.visible = on && opts.showScan;
+  }
+  for (const it of items) it.body.wakeUp();
+}
+function refreshVoxVis() { for (const c of VOX.chunks.values()) { c.dirty = true; c.built = 0; } }
 
 /* ============================== Hand tracking (MediaPipe, off the main thread) ============================== */
 const MP_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
@@ -2033,7 +1763,18 @@ function processHand(res, depthInfo, now) {
   hand.newGrip = hand.fistOn ? 'fist' : hand.pinchOn ? 'pinch' : 'open';
 }
 function findHandTarget(grip) {
-  if (!hand.p3) return null;
+  if (!hand.p3 || !hand.lm) return null;
+  // 1) whatever your fingers overlap on screen
+  const sp = grip === 'fist' ? { x: (hand.lm[0].x + hand.lm[9].x) / 2, y: (hand.lm[0].y + hand.lm[9].y) / 2 } : { x: (hand.lm[4].x + hand.lm[8].x) / 2, y: (hand.lm[4].y + hand.lm[8].y) / 2 };
+  const sx = sp.x * innerWidth, sy = sp.y * innerHeight, focal = projMat.elements[5] * innerHeight / 2, margin = grip === 'fist' ? 50 : 34;
+  let sBest = null, sScore = Infinity;
+  for (const it of items) {
+    if (held && held.item === it) continue;
+    const sc = toScreen(it.body.position); if (!sc) continue;
+    const rp = it.r * focal / sc.depth, d2 = Math.hypot(sc.x - sx, sc.y - sy);
+    if (d2 < rp + margin) { const score = d2 / (rp + margin) + Math.abs(sc.depth - hand.depth) * 0.6; if (score < sScore) { sScore = score; sBest = it; } }
+  }
+  if (sBest) return sBest;
   const pt = grip === 'fist' ? hand.palmC : hand.pinchP, reach = grip === 'fist' ? 0.085 : 0.055;
   let best = null, bd = Infinity;
   for (const it of items) {
@@ -2042,7 +1783,6 @@ function findHandTarget(grip) {
     if (dist < reach && dist < bd) { bd = dist; best = it; }
   }
   if (best) return best;
-  const sp = grip === 'fist' ? { x: (hand.lm[0].x + hand.lm[9].x) / 2, y: (hand.lm[0].y + hand.lm[9].y) / 2 } : { x: (hand.lm[4].x + hand.lm[8].x) / 2, y: (hand.lm[4].y + hand.lm[8].y) / 2 };
   const dir = lmRay(sp), r = pickRay(dir, 3);
   if (r && Math.abs(r.dist * dir.dot(viewFwd()) - hand.depth) < 0.15) return r.it;
   return null;
@@ -2071,14 +1811,15 @@ function updateHand(dt, now) {
     if (!held && hand.grip !== 'open') {
       const t = findHandTarget(hand.grip);
       if (t) {
-        if (hand.grip === 'pinch' && t.r > 0.09) showHint('That\'s big. Make a fist to grab it', 1600);
+        if (hand.grip === 'pinch' && t.r > 0.13) showHint('That\'s big. Make a fist to grab it', 1600);
         else { startGrab(t, 'hand', hand.anchor); held.grip = hand.grip; }
       }
     }
   }
   hand.hover = held ? null : findHandTarget(hand.fistOn ? 'fist' : 'pinch');
+  updateHoverRing();
   setHandColliders(true, dt);
-  occU.uHandOn.value = 0;
+  drawHandMask();
 }
 function setHandColliders(on, dt) {
   if (!palmBody) return;
@@ -2116,11 +1857,27 @@ function applyCatches() {
   }
   pendingCatch.clear();
 }
+let hoverRing = null;
+function updateHoverRing() {
+  if (!hoverRing) {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 128; const g = cv.getContext('2d');
+    const gr = g.createRadialGradient(64, 64, 40, 64, 64, 62); gr.addColorStop(0, 'rgba(255,255,255,0)'); gr.addColorStop(0.55, 'rgba(255,255,255,0.9)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+    hoverRing = new T.Sprite(new T.SpriteMaterial({ map: new T.CanvasTexture(cv), transparent: true, depthTest: false, depthWrite: false, blending: T.AdditiveBlending }));
+    hoverRing.renderOrder = 10; scene.add(hoverRing);
+  }
+  const it = (held && held.mode === 'hand') ? held.item : hand.hover;
+  hoverRing.visible = !!it && hand.enabled;
+  if (!it) return;
+  const p = it.body.position, s = it.r * 2.6 * (1 + 0.06 * Math.sin(performance.now() / 120));
+  hoverRing.position.set(p.x, p.y, p.z); hoverRing.scale.set(s, s, s);
+  hoverRing.material.color.set(held && held.item === it ? 0x2ee59d : 0xffb347);
+}
 function handLost() {
+  if (hoverRing) hoverRing.visible = false;
   hand.lm = null; hand.lmT = null; hand.p3 = null; hand.p3T = null; hand.pinchOn = false; hand.fistOn = false; hand.grip = 'open'; hand.newGrip = 'open'; hand.hover = null; hand.depth = 0; hand.qInit = false;
   if (held && held.mode === 'hand') releaseGrab();
   handTray.active = false; handTips.active = false;
-  for (const d of drops) if (d.stuck) { d.stuck = null; d.v.set(0, -0.2, 0); }
   if (palmBody) { for (const b of [...tipBodies, palmBody, trayBody]) moveKin(b, false); }
   occU.uHandOn.value = 0;
 }
@@ -2141,9 +1898,9 @@ function drawHandMask() {
   const P = i => [lm[i].x * W, lm[i].y * H];
   const palmW = Math.hypot(P(0)[0] - P(9)[0], P(0)[1] - P(9)[1]);
   g.beginPath(); for (const i of [0, 1, 2, 5, 9, 13, 17]) { const [x, y] = P(i); i === 0 ? g.moveTo(x, y) : g.lineTo(x, y); } g.closePath(); g.fill();
-  g.lineWidth = palmW * 0.28; g.stroke();
+  g.lineWidth = palmW * 0.7; g.stroke();
   FINGERS.forEach((f, fi) => {
-    g.lineWidth = palmW * (fi === 0 ? 0.3 : fi === 4 ? 0.22 : 0.26);
+    g.lineWidth = palmW * (fi === 0 ? 0.6 : fi === 4 ? 0.5 : 0.55);
     g.beginPath(); const s = fi === 0 ? P(1) : P(f[0]); g.moveTo(s[0], s[1]);
     for (const i of f) { const [x, y] = P(i); g.lineTo(x, y); } g.stroke();
   });
@@ -2210,7 +1967,6 @@ function setTrash(on) { trashMode = on; $('trashBtn').classList.toggle('red', on
 $('trashBtn').onclick = () => setTrash(!trashMode);
 $('clearBtn').onclick = () => {
   [...items].forEach(it => removeItem(it, true));
-  drops.length = 0; puddles.forEach(p => scene.remove(p.m)); puddles.length = 0; puffs.forEach(p => scene.remove(p.sp)); puffs.length = 0;
   sfx.poof(); showHint('All cleared', 1200);
 };
 $('sizeBtn').onclick = () => { sizeIdx = (sizeIdx + 1) % SIZES.length; $('sizeBtn').textContent = SIZES[sizeIdx].n; };
@@ -2220,8 +1976,8 @@ document.querySelectorAll('.tog').forEach(t => {
   const k = t.dataset.k; t.classList.toggle('on', !!opts[k]);
   t.onclick = () => {
     opts[k] = !opts[k]; t.classList.toggle('on', opts[k]);
-    if (k === 'showScan' && HF.vis) HF.vis.visible = opts.showScan && HF.inWorld;
-    if (k === 'obstacles') { if (opts.obstacles) hfAddToWorld(); else hfRemoveFromWorld(); if (HF.vis) HF.vis.visible = opts.showScan && HF.inWorld; }
+    if (k === 'showScan') refreshVoxVis();
+    if (k === 'obstacles') setVoxEnabled(opts.obstacles);
     if (k === 'sound' && !opts.sound) setPourSound(false);
   };
 });
@@ -2391,7 +2147,7 @@ renderer.setAnimationLoop((t, frame) => {
         }
       }
       // Prefer the room scan where it's closer (e.g. a couch cushion or a mug on the table)
-      const sh = haveCam ? hfRay(camPos, ndcRay(0, 0)) : null;
+      const sh = haveCam ? voxRay(camPos, ndcRay(0, 0)) : null;
       if (sh) {
         const planeP = shown ? new T.Vector3().setFromMatrixPosition(reticle.matrix) : null;
         if (!planeP || sh.distanceTo(camPos) < planeP.distanceTo(camPos) - 0.05) { reticle.matrix.makeTranslation(sh.x, sh.y + 0.003, sh.z); shown = true; }
@@ -2400,7 +2156,7 @@ renderer.setAnimationLoop((t, frame) => {
       if (now > hintLock) {
         $('hint').textContent = held ? (held.mode === 'hand' ? 'Turn your wrist to rotate. Open your hand to drop' : 'Let go to drop, flick to throw')
           : trashMode ? 'Trash mode: tap items to remove them'
-          : (hand.enabled && hand.lm) ? (hand.hover ? (hand.hover.r > 0.09 ? `Make a fist to grab the ${hand.hover.spec.label.toLowerCase()}` : `Pinch to grab the ${hand.hover.spec.label.toLowerCase()}`) : handTray.active ? 'Palm up: things can sit in your hand' : 'Reach toward something. Pinch or make a fist')
+          : (hand.enabled && hand.lm) ? (hand.hover ? (hand.hover.r > 0.13 ? `Make a fist to grab the ${hand.hover.spec.label.toLowerCase()}` : `Pinch to grab the ${hand.hover.spec.label.toLowerCase()}`) : handTray.active ? 'Palm up: things can sit in your hand' : 'Reach toward something. Pinch or make a fist')
           : shown ? `Tap to place ${SPECS[selected].emoji} · swipe to slice · hold to grab`
           : 'Point at the floor or a table and move your phone slowly';
       }
@@ -2415,13 +2171,11 @@ renderer.setAnimationLoop((t, frame) => {
   }
   updateHand(dt, now);
   updateHeld(dt, now);
-  updatePouring(dt);
   world.step(1 / 60, dt, 4);
   if (pendingBreak.size) { for (const it of [...pendingBreak]) shatter(it); pendingBreak.clear(); }
   applyCatches();
   snapHeld();
-  updateDrops(dt);
-  updatePuddles(dt, now);
+  updateVoxels(now);
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i], b = it.body;
     it.mesh.position.set(b.position.x, b.position.y, b.position.z);

@@ -1919,7 +1919,7 @@ function initReadback(w, h) {
   if (webgl2) { pbo = gl.createBuffer(); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo); gl.bufferData(gl.PIXEL_PACK_BUFFER, w * h * 4, gl.STREAM_READ); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); }
   rb = { gl, prog, buf, tex, fb, w, h, pbo, webgl2, sync: null, out: new Uint8Array(w * h * 4), spare: null,
     locP: gl.getAttribLocation(prog, 'p'), locT: gl.getUniformLocation(prog, 't'), locF: gl.getUniformLocation(prog, 'flip') };
-  renderer.resetState();
+  restoreThree();
 }
 function captureFrame(cam) {
   const tex = glBinding.getCameraImage(cam);
@@ -1948,7 +1948,7 @@ function captureFrame(cam) {
     gl.flush();
   } else { gl.readPixels(0, 0, rb.w, rb.h, gl.RGBA, gl.UNSIGNED_BYTE, rb.out); ready = true; }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  renderer.resetState();
+  restoreThree();
   return ready;
 }
 function pollReadback() {
@@ -1960,7 +1960,7 @@ function pollReadback() {
   gl.bindBuffer(gl.PIXEL_PACK_BUFFER, rb.pbo);
   gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, rb.out);
   gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-  renderer.resetState();
+  restoreThree();
   return true;
 }
 function deliverFrame(now) {
@@ -1976,12 +1976,17 @@ function deliverFrame(now) {
     } catch (e) {}
   }
 }
+// After borrowing the GPU for the camera image, hand drawing back to the AR view.
+// (Resetting alone made the renderer forget the AR framebuffer, so those frames were drawn off-screen: the flicker.)
+let savedRT = null;
+function restoreThree() { renderer.resetState(); renderer.setRenderTarget(savedRT); }
 function handFrameStep(cam, depthInfo, now) {
+  savedRT = renderer.getRenderTarget();
   try {
     if (pollReadback()) deliverFrame(now);
     hand.frameN = (hand.frameN || 0) + 1;
     if (hand.frameN % 2 === 0 && !hand.busy && !(rb && rb.sync)) { if (captureFrame(cam)) deliverFrame(now); }
-  } catch (e) { console.warn(e); renderer.resetState(); }
+  } catch (e) { console.warn(e); restoreThree(); }
   if (hand.pending) { const r = hand.pending; hand.pending = null; processHand(r, depthInfo, now); }
 }
 

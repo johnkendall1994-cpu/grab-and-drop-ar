@@ -105,6 +105,7 @@
       <div class="row"><span>Fine detail (2 cm, heavier)</span><button class="tog" data-k="fine"></button></div>
       <div class="row"><span>Hand pushes objects</span><button class="tog on" data-k="handPush"></button></div>
       <div class="row"><span>Flip hand camera (if hand dots are upside-down)</span><button class="tog" data-k="flipCam"></button></div>
+      <div class="row"><span>Test: pause hand camera copy (hand stops tracking)</span><button class="tog" data-k="handNoCopy"></button></div>
       <div class="row"><span>Sounds</span><button class="tog on" data-k="sound"></button></div>
       <div class="stat" id="featStat" style="margin-top:8px"></div>
       <div style="margin-top:10px">
@@ -134,7 +135,7 @@ const Y = new T.Vector3(0, 1, 0);
 const qY = a => new T.Quaternion().setFromAxisAngle(Y, a);
 const qZ = a => new T.Quaternion().setFromAxisAngle(new T.Vector3(0, 0, 1), a);
 
-const opts = { scanLevel: 'high', fine: false, occlusion: true, obstacles: true, showScan: false, handPush: true, flipCam: false, sound: true };
+const opts = { handNoCopy: false, scanLevel: 'high', fine: false, occlusion: true, obstacles: true, showScan: false, handPush: true, flipCam: false, sound: true };
 const features = { light: false, depth: false, camera: false, overlay: false };
 
 /* ============================== Renderer & scene ============================== */
@@ -1839,7 +1840,7 @@ self.onmessage = async (e) => {
       const mp = await import(m.url + '/vision_bundle.mjs');
       const fs = await mp.FilesetResolver.forVisionTasks(m.url + '/wasm');
       const mk = (delegate) => mp.HandLandmarker.createFromOptions(fs, { baseOptions: { modelAssetPath: m.model, delegate }, runningMode: 'VIDEO', numHands: 1, minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5 });
-      try { lm = await mk('GPU'); } catch (err) { lm = await mk('CPU'); }
+      lm = await mk('CPU');
       self.postMessage({ type: 'ready' });
     } catch (err) { self.postMessage({ type: 'error', msg: String((err && err.message) || err) }); }
   } else if (m.type === 'frame' && lm) {
@@ -1874,7 +1875,7 @@ async function startMainThread() {
   const mp = await import(MP_URL + '/vision_bundle.mjs');
   const fs = await mp.FilesetResolver.forVisionTasks(MP_URL + '/wasm');
   const mk = delegate => mp.HandLandmarker.createFromOptions(fs, { baseOptions: { modelAssetPath: MP_MODEL, delegate }, runningMode: 'VIDEO', numHands: 1, minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5 });
-  try { landmarker = await mk('GPU'); } catch (e) { landmarker = await mk('CPU'); }
+  landmarker = await mk('CPU');
 }
 async function toggleHand() {
   if (hand.loading) return;
@@ -1882,8 +1883,11 @@ async function toggleHand() {
   if (!features.camera) { showHint('Hand tracking needs camera access for AR, which this phone or Chrome didn\'t allow. Update Chrome and try again', 3500); return; }
   if (!hand.mode) {
     hand.loading = true; setHandBtn(); showHint('Loading hand tracking…', 30000);
-    try { await startMainThread(); hand.mode = 'main'; }
-    catch (e) { hand.loading = false; setHandBtn(); showHint('Couldn\'t load hand tracking: ' + (e.message || e), 3500); return; }
+    if (await startWorker()) hand.mode = 'worker';
+    else {
+      try { await startMainThread(); hand.mode = 'main'; }
+      catch (e) { hand.loading = false; setHandBtn(); showHint('Couldn\'t load hand tracking: ' + (e.message || e), 3500); return; }
+    }
     hand.loading = false;
   }
   if (!palmBody) {
@@ -1914,7 +1918,7 @@ function initReadback(w, h) {
   const fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  const webgl2 = false; // read the frame immediately so landmarks match what's on screen
+  const webgl2 = typeof gl.fenceSync === 'function'; // grab now, collect next frame (no stall)
   let pbo = null;
   if (webgl2) { pbo = gl.createBuffer(); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo); gl.bufferData(gl.PIXEL_PACK_BUFFER, w * h * 4, gl.STREAM_READ); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); }
   rb = { gl, prog, buf, tex, fb, w, h, pbo, webgl2, sync: null, out: new Uint8Array(w * h * 4), spare: null,
@@ -1984,8 +1988,7 @@ function handFrameStep(cam, depthInfo, now) {
   savedRT = renderer.getRenderTarget();
   try {
     if (pollReadback()) deliverFrame(now);
-    hand.frameN = (hand.frameN || 0) + 1;
-    if (hand.frameN % 2 === 0 && !hand.busy && !(rb && rb.sync)) { if (captureFrame(cam)) deliverFrame(now); }
+    if (!opts.handNoCopy && now - (hand.lastCap || 0) > 55 && !hand.busy && !(rb && rb.sync)) { hand.lastCap = now; if (captureFrame(cam)) deliverFrame(now); }
   } catch (e) { console.warn(e); restoreThree(); }
   if (hand.pending) { const r = hand.pending; hand.pending = null; processHand(r, depthInfo, now); }
 }

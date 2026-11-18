@@ -37,6 +37,8 @@
     background: rgba(18,14,32,.62); pointer-events: none; }
   #score { position: absolute; top: 108px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 92%;
     font-size: 14px; font-weight: 700; padding: 7px 14px; border-radius: 999px; background: rgba(209,36,43,.85); display: none; pointer-events: auto; }
+  #power { position: absolute; right: 14px; top: 35%; width: 14px; height: 30%; border-radius: 8px; background: rgba(18,14,32,.6); display: none; overflow: hidden; pointer-events: none; }
+  #powerFill { position: absolute; left: 0; right: 0; bottom: 0; height: 50%; background: #ffb347; }
   #bar { touch-action: pan-x; position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 8px;
     padding-bottom: max(12px, env(safe-area-inset-bottom)); display: flex; gap: 8px; overflow-x: auto;
     background: linear-gradient(transparent, rgba(8,6,16,.78)); scrollbar-width: none; }
@@ -97,12 +99,15 @@
     </div>
     <div id="hint">Point at the floor or a table and move your phone slowly</div>
     <div id="score"></div>
+    <div id="power"><div id="powerFill"></div></div>
     <div class="panel" id="settings">
       <div class="row"><span>Hide behind real objects</span><button class="tog on" data-k="occlusion"></button></div>
       <div class="row"><span>3D room scan physics</span><button class="tog on" data-k="obstacles"></button></div>
       <div class="row"><span>Show room scan</span><button class="tog" data-k="showScan"></button></div>
       <div class="row"><span>Scan sensitivity</span><button class="btn" id="scanLvlBtn" style="height:34px;min-width:80px">High</button></div>
       <div class="row"><span>Fine detail (2 cm, heavier)</span><button class="tog" data-k="fine"></button></div>
+      <div class="row"><span>Dart aim assist</span><button class="tog on" data-k="aimAssist"></button></div>
+      <div class="row"><span>Fingers in front of held objects (beta)</span><button class="tog" data-k="handFront"></button></div>
       <div class="row"><span>Hand pushes objects</span><button class="tog on" data-k="handPush"></button></div>
       <div class="row"><span>Flip hand camera (if hand dots are upside-down)</span><button class="tog" data-k="flipCam"></button></div>
       <div class="row"><span>Test: pause hand camera copy (hand stops tracking)</span><button class="tog" data-k="handNoCopy"></button></div>
@@ -135,7 +140,7 @@ const Y = new T.Vector3(0, 1, 0);
 const qY = a => new T.Quaternion().setFromAxisAngle(Y, a);
 const qZ = a => new T.Quaternion().setFromAxisAngle(new T.Vector3(0, 0, 1), a);
 
-const opts = { handNoCopy: false, scanLevel: 'high', fine: false, occlusion: true, obstacles: true, showScan: false, handPush: true, flipCam: false, sound: true };
+const opts = { aimAssist: true, handFront: false, handNoCopy: false, scanLevel: 'high', fine: false, occlusion: true, obstacles: true, showScan: false, handPush: true, flipCam: false, sound: true };
 const features = { light: false, depth: false, camera: false, overlay: false };
 
 /* ============================== Renderer & scene ============================== */
@@ -220,7 +225,7 @@ uniform sampler2D uHandMask; uniform float uHandOn; uniform float uHandDepth;
 void main() {
   vec2 sc = gl_FragCoord.xy / uRes;
   float hm = 0.0;
-  if (uHandOn > 0.5) hm = texture2D(uHandMask, sc).r;
+  if (uHandOn > 0.5) { hm = texture2D(uHandMask, sc).r; if (uHandOn > 1.5 && hm > 0.6 && vViewPosition.z > uHandDepth) discard; }
   if (uOcc > 0.5 && hm < 0.02) {
     vec2 duv = (uDepthMat * vec4(sc.x, 1.0 - sc.y, 0.0, 1.0)).xy;
     vec2 rg = texture2D(uDepthTex, duv).rg;
@@ -852,8 +857,18 @@ SPECS.bowl = base({ label: 'Bowl', emoji: '🥣', kind: 'object', mass: 0.35, re
     return { g, shapes, r: 0.08 * s };
   },
 });
-SPECS.ball = base({ label: 'Ball', emoji: '🏐', kind: 'ball', mass: 0.35, rest: 0.82, fric: 0.6, sound: 'bounce', wobble: 0.15,
+SPECS.ball = base({ label: 'Ball', emoji: '🏐', kind: 'ball', mass: 0.35, rest: 0.8, fric: 0.6, sound: 'bounce', wobble: 0, angDamp: 0.25,
   build: s => { const R = 0.11 * s, g = new T.Group(); g.add(new T.Mesh(new T.SphereGeometry(R, 40, 28), M.beach())); return { g, shapes: [sphS(R)], r: R }; },
+});
+const BOUNCY_COLS = [['#ff2d55', '#ffd60a'], ['#00c2ff', '#7cff4f'], ['#bf5af2', '#ff9f0a'], ['#30d158', '#0a84ff'], ['#ff375f', '#5e5ce6'], ['#ffcc00', '#ff2d55']];
+function bouncyMat(i) {
+  return MAT('bouncy' + i, () => ({ map: canvasTex('bouncy' + i, 256, 128, (g, w, h) => {
+    const [c1, c2] = BOUNCY_COLS[i]; g.fillStyle = c1; g.fillRect(0, 0, w, h); g.fillStyle = c2;
+    for (let k = 0; k < 3; k++) { g.beginPath(); for (let x = 0; x <= w; x += 4) g.lineTo(x, h * (0.2 + k * 0.3) + Math.sin(x / w * Math.PI * 4 + k) * 14); for (let x = w; x >= 0; x -= 4) g.lineTo(x, h * (0.2 + k * 0.3) + 12 + Math.sin(x / w * Math.PI * 4 + k + 0.6) * 14); g.fill(); }
+  }).map, roughness: 0.1, clearcoat: 1, clearcoatRoughness: 0.04 }));
+}
+SPECS.bouncy = base({ label: 'Bouncy', emoji: '🔴', kind: 'ball', mass: 0.03, rest: 0.93, fric: 0.95, sound: 'rubber', wobble: 0, linDamp: 0.005, angDamp: 0.02,
+  build: s => { const R = 0.0225 * s, g = new T.Group(); g.add(new T.Mesh(new T.SphereGeometry(R, 28, 20), bouncyMat((Math.random() * BOUNCY_COLS.length) | 0))); return { g, shapes: [sphS(R)], r: R }; },
 });
 SPECS.bowling = base({ label: 'Bowling', emoji: '🎳', kind: 'object', mass: 6, rest: 0.05, fric: 0.35, sound: 'heavy',
   build: s => {
@@ -966,7 +981,7 @@ SPECS.darts = { label: 'Darts', emoji: '📌', kind: 'darts' };
 SPECS.dart = base({ label: 'Dart', emoji: '📌', kind: 'object', mass: 0.022, rest: 0.15, fric: 0.5, sound: 'plastic', hidden: true,
   build: s => ({ g: dartModel(s, 0xffb703), shapes: [boxS(0.004 * s, 0.004 * s, 0.06 * s)], r: 0.07 * s }) });
 const FLIGHT_COLS = [0xe63946, 0x2a9d8f, 0xffb703];
-const DARTS = { flying: [], stuck: [], turn: [], total: 0, view: null, viewCol: null, hideUntil: 0, n: 0 };
+const DARTS = { flying: [], stuck: [], turn: [], total: 0, view: null, viewCol: null, hideUntil: 0, n: 0, floats: [] };
 function updateScoreChip() {
   const chip = $('score'), boards = items.some(i => i.spec === SPECS.dartboard);
   chip.style.display = (boards || selected === 'darts') ? 'block' : 'none';
@@ -989,17 +1004,12 @@ function dartStart() { return new T.Vector3(0.035, -0.055, -0.2).applyQuaternion
 function throwDart(dx, dy, ms) {
   if (!haveCam) return;
   if (!items.some(i => i.spec === SPECS.dartboard)) showHint('Tip: place a 🎯 Dartboard on a wall first', 2000);
-  if (DARTS.turn.length >= 3) clearTurn();
   const speedPx = Math.hypot(dx, dy) / Math.max(40, ms);              // px per ms
   const speed = clamp(speedPx * 6, 4, 13);
   const right = new T.Vector3(1, 0, 0).applyQuaternion(camQuat), up = new T.Vector3(0, 1, 0).applyQuaternion(camQuat);
   const dir = viewFwd().addScaledVector(right, clamp(dx / (Math.abs(dy) + 1), -0.6, 0.6) * 0.18).normalize();
   const v = dir.multiplyScalar(speed).addScaledVector(up, 0.35 + 1.2 / speed);
-  const col = FLIGHT_COLS[DARTS.n++ % 3], m = dartModel(1, col);
-  const p = dartStart(); m.position.copy(p); scene.add(m);
-  DARTS.flying.push({ m, p, v, col, age: 0 });
-  DARTS.hideUntil = performance.now() + 380;
-  noise(0.12, 0.12, 1800, 2, 'bandpass', 0, 600); buzz(10);
+  launchDart(dartStart(), v);
 }
 function updateDarts(dt, now) {
   // the dart in your hand (bottom right of the view)
@@ -1023,11 +1033,12 @@ function updateDarts(dt, now) {
       const t = n.dot(c.clone().sub(d.p)) / den; if (t < 0 || t > 1) continue;
       const hit = d.p.clone().addScaledVector(seg, t), off = hit.clone().sub(c);
       if (off.length() > BOARD_R * it.scale) continue;
-      const lo = off.applyQuaternion(q.clone().invert()).divideScalar(it.scale), sc = scoreAt(lo.x, lo.y);
+      const lo = off.applyQuaternion(q.clone().invert()).divideScalar(it.scale), sc = assistedScore(lo.x, lo.y);
       const dir = d.v.clone().normalize();
       d.m.position.copy(hit).addScaledVector(dir, 0.012);
       d.m.quaternion.setFromUnitVectors(new T.Vector3(0, 0, -1), dir);
-      DARTS.stuck.push({ m: d.m, board: it });
+      DARTS.stuck.push({ m: d.m, board: it, t0: 0, base: d.m.quaternion.clone() });
+      scoreFloat(hit.clone().addScaledVector(n, 0.03), sc.v ? (sc.t.startsWith('Triple') ? 'T' + sc.t.slice(7) + ' · ' + sc.v : sc.t.startsWith('Double') ? 'D' + sc.t.slice(7) + ' · ' + sc.v : sc.t.replace('!', '') + (isNaN(sc.t) ? ' · ' + sc.v : '')) : 'Miss');
       DARTS.turn.push(sc); DARTS.total += sc.v;
       tone(180, 90, 0.07, 0.35); noise(0.05, 0.25, 900, 2, 'bandpass'); buzz(25);
       if (sc.v >= 50 || sc.t.startsWith('Triple')) { showHint(`${sc.t} ${sc.v} 🔥`, 1600); tone(660, 990, 0.18, 0.12, 'triangle', 0.05); }
@@ -1053,10 +1064,140 @@ function updateDarts(dt, now) {
     if (done) { DARTS.flying.splice(i, 1); updateScoreChip(); continue; }
     d.p.copy(np); d.m.position.copy(np);
     d.m.quaternion.setFromUnitVectors(new T.Vector3(0, 0, -1), d.v.clone().normalize());
+    if (d.wobAx) d.m.quaternion.multiply(new T.Quaternion().setFromAxisAngle(d.wobAx, 0.09 * Math.exp(-d.age * 4) * Math.sin(d.age * 38)));
   }
   // darts stuck in a board that was removed fall away
   for (let i = DARTS.stuck.length - 1; i >= 0; i--) if (!items.includes(DARTS.stuck[i].board)) { scene.remove(DARTS.stuck[i].m); DARTS.stuck.splice(i, 1); }
 }
+/* Darts: aiming, launching, hand throws, retrieving, effects */
+const AIM = { on: false, x0: 0, y0: 0, power: 0.55, side: 0, sweet: false };
+const dartSpeed = p => 3.5 + p * 9;
+function dartVel(power, side) {
+  const right = new T.Vector3(1, 0, 0).applyQuaternion(camQuat), up = new T.Vector3(0, 1, 0).applyQuaternion(camQuat);
+  const speed = dartSpeed(power);
+  const dir = viewFwd().addScaledVector(right, side * 0.12).normalize();
+  return dir.multiplyScalar(speed).addScaledVector(up, 0.35 + 1.2 / speed);
+}
+function boardHit(p0, p1) {
+  for (const it of items) {
+    if (it.spec !== SPECS.dartboard) continue;
+    const q = bodyQuat(it.body), n = new T.Vector3(0, 0, 1).applyQuaternion(q);
+    const c = bodyPos(it.body).addScaledVector(n, 0.02 * it.scale), seg = p1.clone().sub(p0), den = n.dot(seg);
+    if (den >= 0) continue;
+    const t = n.dot(c.clone().sub(p0)) / den; if (t < 0 || t > 1) continue;
+    const hit = p0.clone().addScaledVector(seg, t), off = hit.clone().sub(c);
+    if (off.length() > BOARD_R * it.scale) continue;
+    return { it, hit, q, local: off.applyQuaternion(q.clone().invert()).divideScalar(it.scale) };
+  }
+  return null;
+}
+// Simulated flight for the aim dot and arc
+function predictDart(power, side) {
+  let p = dartStart(), v = dartVel(power, side);
+  const pts = [p.clone()];
+  for (let i = 0; i < 150; i++) {
+    const dt = 1 / 90; v = v.clone(); v.y -= 9.8 * dt;
+    const np = p.clone().addScaledVector(v, dt);
+    const h = boardHit(p, np); if (h) { pts.push(h.hit); return { pts, hit: h }; }
+    if (floorY !== null && np.y < floorY) { pts.push(np); return { pts, hit: null }; }
+    p = np; if (i % 3 === 0) pts.push(p.clone());
+  }
+  return { pts, hit: null };
+}
+let aimDot = null, aimLine = null;
+function updateAimVisuals() {
+  const boards = items.some(i => i.spec === SPECS.dartboard);
+  const on = xrActive && haveCam && selected === 'darts' && boards;
+  if (!aimDot) {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 64; const g = cv.getContext('2d');
+    const gr = g.createRadialGradient(32, 32, 0, 32, 32, 30); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.35, 'rgba(255,70,70,0.9)'); gr.addColorStop(1, 'rgba(255,0,0,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+    aimDot = new T.Sprite(new T.SpriteMaterial({ map: new T.CanvasTexture(cv), transparent: true, depthTest: false, depthWrite: false }));
+    aimDot.scale.set(0.03, 0.03, 0.03); aimDot.renderOrder = 11; scene.add(aimDot);
+    aimLine = new T.Line(new T.BufferGeometry(), new T.LineDashedMaterial({ color: 0xffffff, dashSize: 0.03, gapSize: 0.025, transparent: true, opacity: 0.7, depthTest: false }));
+    aimLine.renderOrder = 11; aimLine.frustumCulled = false; scene.add(aimLine);
+  }
+  if (!on) { aimDot.visible = aimLine.visible = false; $('power').style.display = 'none'; return; }
+  const pr = predictDart(AIM.on ? AIM.power : 0.55, AIM.on ? AIM.side : 0);
+  aimDot.visible = !!pr.hit;
+  if (pr.hit) aimDot.position.copy(pr.hit.hit).add(new T.Vector3(0, 0, 0.004).applyQuaternion(pr.hit.q));
+  aimLine.visible = AIM.on;
+  if (AIM.on) {
+    aimLine.geometry.setFromPoints(pr.pts); aimLine.computeLineDistances();
+    const sweet = !!pr.hit && Math.hypot(pr.hit.local.x, pr.hit.local.y) < 0.17;
+    if (sweet && !AIM.sweet) buzz(8);
+    AIM.sweet = sweet;
+    const pw = $('power'); pw.style.display = 'block';
+    $('powerFill').style.height = Math.round(AIM.power * 100) + '%';
+    $('powerFill').style.background = sweet ? '#2ee59d' : '#ffb347';
+  } else $('power').style.display = 'none';
+}
+function launchDart(p, v) {
+  if (DARTS.turn.length >= 3) clearTurn();
+  const col = FLIGHT_COLS[DARTS.n++ % 3], m = dartModel(1, col);
+  m.position.copy(p); scene.add(m);
+  DARTS.flying.push({ m, p: p.clone(), v: v.clone(), col, age: 0, wobAx: new T.Vector3(Math.random() - 0.5, Math.random() - 0.5, 0).normalize() });
+  DARTS.hideUntil = performance.now() + 380;
+  noise(0.12, 0.12, 1800, 2, 'bandpass', 0, 600); buzz(10);
+}
+function throwAimed() {
+  if (!haveCam) return;
+  if (!items.some(i => i.spec === SPECS.dartboard)) showHint('Tip: place a 🎯 Dartboard on a wall first', 2000);
+  launchDart(dartStart(), dartVel(AIM.power, AIM.side));
+}
+// Light aim assist: a hit just outside a ring boundary counts for the better ring
+function assistedScore(lx, ly) {
+  let best = scoreAt(lx, ly);
+  if (!opts.aimAssist) return best;
+  const r = Math.hypot(lx, ly), a = Math.atan2(lx, ly);
+  for (const dr of [-0.006, 0.006]) for (const da of [-0.02, 0, 0.02]) {
+    const rr = Math.max(0, r + dr), s = scoreAt(Math.sin(a + da) * rr, Math.cos(a + da) * rr);
+    if (s.v > best.v) best = s;
+  }
+  return best;
+}
+function scoreFloat(p, text) {
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 96; const g = cv.getContext('2d');
+  g.font = '900 56px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.lineWidth = 8; g.strokeStyle = 'rgba(0,0,0,.6)'; g.strokeText(text, 128, 48); g.fillStyle = '#fff'; g.fillText(text, 128, 48);
+  const sp = new T.Sprite(new T.SpriteMaterial({ map: new T.CanvasTexture(cv), transparent: true, depthTest: false, depthWrite: false }));
+  sp.scale.set(0.16, 0.06, 1); sp.position.copy(p); sp.renderOrder = 12; scene.add(sp);
+  DARTS.floats.push({ sp, t: 0 });
+}
+function spawnDartInHand() {
+  if (!hand.p3) return;
+  const p = hand.pinchP.clone();
+  const it = spawnSpec(SPECS.dart, 1, p, new T.Quaternion().setFromUnitVectors(new T.Vector3(0, 0, -1), viewFwd()));
+  startGrab(it, 'hand', { a: 4, b: 8, gap: 0, firm: true, gesture: true });
+  showHint('Pull back and throw, open your fingers to let go', 1800);
+}
+function grabStuckDart() {
+  if (!hand.lm) return false;
+  const sx = (hand.lm[4].x + hand.lm[8].x) / 2 * innerWidth, sy = (hand.lm[4].y + hand.lm[8].y) / 2 * innerHeight;
+  for (let i = 0; i < DARTS.stuck.length; i++) {
+    const d = DARTS.stuck[i], tail = d.m.position.clone().add(new T.Vector3(0, 0, 0.03).applyQuaternion(d.m.quaternion));
+    const sc = toScreen(tail); if (!sc || Math.hypot(sc.x - sx, sc.y - sy) > 40) continue;
+    scene.remove(d.m); DARTS.stuck.splice(i, 1);
+    const it = spawnSpec(SPECS.dart, 1, tail, d.m.quaternion.clone());
+    startGrab(it, 'hand', { a: 4, b: 8, gap: 0, firm: true, gesture: true });
+    noise(0.06, 0.2, 1200, 2, 'bandpass'); buzz(15); showHint('Pulled it out!', 900);
+    return true;
+  }
+  return false;
+}
+function updateDartFx(dt) {
+  for (let i = DARTS.floats.length - 1; i >= 0; i--) {
+    const f = DARTS.floats[i]; f.t += dt; f.sp.position.y += dt * 0.06; f.sp.material.opacity = Math.max(0, 1 - f.t / 1.3);
+    if (f.t > 1.3) { scene.remove(f.sp); DARTS.floats.splice(i, 1); }
+  }
+  for (const d of DARTS.stuck) {
+    if (d.t0 === undefined || d.base === undefined) continue;
+    d.t0 += dt;
+    const a = 0.07 * Math.exp(-d.t0 * 7) * Math.sin(d.t0 * 55);
+    d.m.quaternion.copy(d.base).multiply(qX(a));
+  }
+}
+
 function placeBoard(p, how, dir, sc) {
   const f = new T.Vector3(camPos.x - p.x, 0, camPos.z - p.z); if (f.lengthSq() < 1e-6) f.set(0, 0, 1); f.normalize();
   const R = BOARD_R * sc, c = p.clone();
@@ -1069,7 +1210,7 @@ function placeBoard(p, how, dir, sc) {
   return it;
 }
 
-const MENU = ['pizza', 'burger', 'donut', 'apple', 'orange', 'banana', 'watermelon', 'cake', 'pancakes', 'jelly', 'soda', 'glass', 'plate', 'bowl', 'ball', 'bowling', 'pins', 'jenga', 'dominoes', 'dartboard', 'darts'];
+const MENU = ['pizza', 'burger', 'donut', 'apple', 'orange', 'banana', 'watermelon', 'cake', 'pancakes', 'jelly', 'soda', 'glass', 'plate', 'bowl', 'ball', 'bouncy', 'bowling', 'pins', 'jenga', 'dominoes', 'dartboard', 'darts'];
 
 // Piece helpers ---------------------------------------------------------
 function centered(raw, shapeFn) {
@@ -1106,12 +1247,14 @@ world.solver.iterations = 14;
 world.defaultContactMaterial.friction = 0.5;
 world.defaultContactMaterial.restitution = 0.1;
 const groundMat = new C.Material('ground');
+const handMat = new C.Material('hand');
 const physMats = {};
 function physMat(fric, rest) {
   const key = fric + '|' + rest;
   if (physMats[key]) return physMats[key].m;
   const m = new C.Material(key);
   world.addContactMaterial(new C.ContactMaterial(m, groundMat, { friction: fric, restitution: rest }));
+  world.addContactMaterial(new C.ContactMaterial(m, handMat, { friction: 0.9, restitution: 0 }));
   for (const o of Object.values(physMats)) world.addContactMaterial(new C.ContactMaterial(m, o.m, { friction: Math.sqrt(fric * o.f), restitution: rest * o.r }));
   world.addContactMaterial(new C.ContactMaterial(m, m, { friction: fric, restitution: rest * rest }));
   physMats[key] = { m, f: fric, r: rest };
@@ -1180,6 +1323,7 @@ const SOUNDS = {
   ceramic: v => { tone(1900, 1600, 0.16, 0.12 * v, 'triangle'); tone(2700, 2400, 0.1, 0.06 * v); noise(0.04, 0.15 * v, 4000, 2, 'bandpass'); },
   glass: v => { tone(3200, 3000, 0.25, 0.08 * v); tone(4300, 4100, 0.18, 0.05 * v); noise(0.03, 0.1 * v, 6000, 2, 'bandpass'); },
   bounce: v => tone(180, 90, 0.12, 0.38 * v),
+  rubber: v => { tone(950 + Math.random() * 250, 520, 0.07, 0.28 * v); tone(320, 190, 0.05, 0.12 * v); },
   wood: v => { tone(720, 520, 0.06, 0.22 * v, 'triangle'); noise(0.04, 0.16 * v, 1500, 3, 'bandpass'); },
   plastic: v => { tone(900, 600, 0.04, 0.12 * v, 'square'); noise(0.03, 0.1 * v, 2500, 2, 'bandpass'); },
   can: v => { tone(1200, 900, 0.08, 0.1 * v, 'triangle'); noise(0.06, 0.15 * v, 3000, 2, 'bandpass'); },
@@ -1220,7 +1364,7 @@ const pendingBreak = new Set();
 function spawnSpec(spec, scale, pos, quat, built) {
   built = built || spec.build(scale);
   const { g, shapes, r } = built;
-  const body = new C.Body({ mass: spec.mass * scale ** 3, material: physMat(spec.fric, spec.rest), linearDamping: 0.04, angularDamping: 0.1 });
+  const body = new C.Body({ mass: spec.mass * scale ** 3, material: physMat(spec.fric, spec.rest), linearDamping: spec.linDamp ?? 0.04, angularDamping: spec.angDamp ?? 0.1 });
   for (const sh of shapes) body.addShape(sh.s, sh.o ? new C.Vec3(sh.o[0], sh.o[1], sh.o[2]) : undefined, sh.q ? new C.Quaternion(sh.q.x, sh.q.y, sh.q.z, sh.q.w) : undefined);
   body.sleepSpeedLimit = 0.06; body.sleepTimeLimit = 0.5;
   body.position.set(pos.x, pos.y, pos.z);
@@ -1329,7 +1473,7 @@ function respawnScaled(it, factor) {
   removeItem(it);
   const n = spawnSpec(it.spec, it.scale * factor, p, q);
   n.body.velocity.copy(v); n.body.angularVelocity.copy(w); n.bites = it.bites;
-  if (wasHeld) { held = h; held.item = n; n.body.type = C.Body.KINEMATIC; n.body.updateSolveMassProperties && n.body.updateSolveMassProperties(); }
+  if (wasHeld) { held = h; held.item = n; if (h.mode === 'drag') { n.body.type = C.Body.KINEMATIC; n.body.updateSolveMassProperties && n.body.updateSolveMassProperties(); } else n.body.collisionFilterMask = -1 ^ 2; if (h.rLocal) h.rLocal.multiplyScalar(factor); }
   return n;
 }
 function bite(it) {
@@ -1458,23 +1602,23 @@ function placeAt(pt, info, now) {
   it.wob = 0.2 * (spec.wobble || 0); it.wobT = 0;
 }
 
-/* ============================== Holding (phone or hand) ============================== */
-let held = null; // {item, mode:'phone'|'hand', local, len, relQ, hist[], offset}
+/* ============================== Holding (drag or hand) ============================== */
+let held = null; // drag: kinematic follow · hand: dynamic body pulled by a spring at the grip point
 let lastEat = 0;
-function startGrab(it, mode, handPoint) {
+function startGrab(it, mode, grip) {
   if (held) releaseGrab();
   const b = it.body;
-  const camInv = camQuat.clone().invert();
-  const local = bodyPos(b).sub(camPos).applyQuaternion(camInv);
-  let len = local.length(); len = clamp(len, 0.22, 1.4); local.setLength(len);
-  const relQ = camInv.clone().multiply(bodyQuat(b));
-  b.type = C.Body.KINEMATIC; b.updateSolveMassProperties && b.updateSolveMassProperties();
-  b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0); b.wakeUp();
-  const hRel = mode === 'hand' ? hand.q.clone().invert().multiply(bodyQuat(b)) : null;
-  held = { item: it, mode, local, len, baseLen: len, relQ, hRel, hist: [], offset: handPoint ? bodyPos(b).sub(handPoint) : null };
-  sfx.grab(); buzz(28);
-  if (mode === 'phone') showHint(it.spec.edible || it.spec === SPECS.soda ? 'Move your phone to carry it. Tap with another finger to take a bite. Let go to drop, flick to throw' : 'Move your phone to carry it. Let go to drop, flick to throw', 2600);
-  else showHint('Got it! Open your hand to drop, fling to throw', 2000);
+  b.wakeUp();
+  const a = gripAnchor(grip) || bodyPos(b);
+  const bq = bodyQuat(b);
+  // grip point in the object's own frame (so it's held where you touched it)
+  const rLocal = a.clone().sub(bodyPos(b)).applyQuaternion(bq.clone().invert());
+  if (rLocal.length() > it.r * 0.95) rLocal.setLength(it.r * 0.95);
+  b.collisionFilterMask = -1 ^ 2;                       // ignore your own hand while held
+  held = { item: it, mode, grip, rLocal, hRel: hand.q.clone().invert().multiply(bq), hist: [], far: 0 };
+  if (it.spec.edible && it.spec.wobble) { it.wob = Math.min(0.3, it.wob + 0.12 * it.spec.wobble); it.wobT = 0; }
+  sfx.grab(); buzz(22);
+  showHint(grip.firm ? 'Got it! Turn your wrist to turn it. Open your hand to let go' : 'Pinched! It can swing. Open your fingers to let go', 1800);
 }
 function dragPoint(x, y) {
   const dir = screenRay(x, y);
@@ -1503,21 +1647,28 @@ function startDrag(it, x, y) {
   sfx.grab(); buzz(15);
   showHint('Drag it anywhere. Lift your finger to drop', 1600);
 }
-function releaseGrab(extraV) {
+function releaseGrab() {
   if (!held) return;
-  const { item, hist } = held; const mode0 = held.mode; held = null;
+  const h = held; held = null;
+  const item = h.item;
   if (!items.includes(item)) return;
   const b = item.body;
-  b.type = C.Body.DYNAMIC; b.updateMassProperties(); b.updateSolveMassProperties && b.updateSolveMassProperties();
-  const v = new T.Vector3();
-  if (hist.length > 1) { const a = hist[0], z = hist[hist.length - 1], dt = (z.t - a.t) / 1000; if (dt > 0.02) v.copy(z.p).sub(a.p).divideScalar(dt).multiplyScalar(1.1); }
-  const maxV = mode0 === 'drag' ? 2.5 : 9; if (mode0 === 'drag') v.multiplyScalar(0.45);
-  if (v.length() > maxV) v.setLength(maxV);
-  if (v.length() < 0.15) v.set(0, 0, 0);
-  b.velocity.set(v.x, v.y, v.z);
-  const sp = v.length();
-  b.angularVelocity.set((Math.random() - 0.5) * sp * 2, (Math.random() - 0.5) * sp * 2, (Math.random() - 0.5) * sp * 2);
-  b.wakeUp(); buzz(14);
+  b.collisionFilterMask = -1;
+  if (h.mode === 'drag') {
+    b.type = C.Body.DYNAMIC; b.updateMassProperties(); b.updateSolveMassProperties && b.updateSolveMassProperties();
+    const v = new T.Vector3();
+    if (h.hist.length > 1) { const a = h.hist[0], z = h.hist[h.hist.length - 1], dt = (z.t - a.t) / 1000; if (dt > 0.02) v.copy(z.p).sub(a.p).divideScalar(dt).multiplyScalar(0.45); }
+    if (v.length() > 2.5) v.setLength(2.5);
+    if (v.length() < 0.15) v.set(0, 0, 0);
+    b.velocity.set(v.x, v.y, v.z);
+  } else {
+    // hand: the object simply keeps the motion your hand gave it
+    if (item.spec === SPECS.dart && b.velocity.length() > 1.4) {
+      const v = new T.Vector3(b.velocity.x, b.velocity.y, b.velocity.z).multiplyScalar(1.15);
+      const p = bodyPos(b); removeItem(item); launchDart(p, v); return;
+    }
+  }
+  b.wakeUp(); buzz(12);
 }
 function updateHeld(dt, now) {
   if (!held) return;
@@ -1533,33 +1684,41 @@ function updateHeld(dt, now) {
     while (held.hist.length && now - held.hist[0].t > 120) held.hist.shift();
     return;
   }
-  let target;
-  if (held.mode === 'hand') {
-    if (!hand.p3) return;
-    if (held.offset) held.offset.multiplyScalar(Math.pow(0.02, dt));
-    target = hand.anchor.clone().add(held.offset || new T.Vector3());
-  } else {
-    target = held.local.clone().applyQuaternion(camQuat).add(camPos);
-  }
-  const sy = surfaceY(target.x, target.z, target.y + 0.5);
-  if (sy > -Infinity) target.y = Math.max(target.y, sy + it.r * 0.6);
-  const q = held.mode === 'hand' && held.hRel ? hand.q.clone().multiply(held.hRel) : camQuat.clone().multiply(held.relQ);
-  b.velocity.set((target.x - b.position.x) / dt, (target.y - b.position.y) / dt, (target.z - b.position.z) / dt);
-  b.angularVelocity.set(0, 0, 0);
-  held.target = target; held.q = q;
-  held.hist.push({ t: now, p: target.clone() });
-  while (held.hist.length && now - held.hist[0].t > 120) held.hist.shift();
-  // Eat / drink when brought to the camera
-  const toCam = target.distanceTo(camPos);
-  const inFront = target.clone().sub(camPos).normalize().dot(new T.Vector3(0, 0, -1).applyQuaternion(camQuat)) > 0.4;
-  if (toCam < 0.17 && inFront && now - lastEat > 650) {
+  if (!hand.p3) return;
+  // Spring at the grip point: light things follow instantly, heavy things lag, swing and can slip
+  const q = bodyQuat(b), r = held.rLocal.clone().applyQuaternion(q);
+  const pivot = bodyPos(b).add(r), target = gripAnchor(held.grip) || pivot.clone();
+  const err = target.clone().sub(pivot), dist = err.length();
+  const m = b.mass || 0.1, alpha = clamp(0.62 / (1 + m * 0.7), 0.1, 0.62);
+  const w = new T.Vector3(b.angularVelocity.x, b.angularVelocity.y, b.angularVelocity.z);
+  const vPivot = new T.Vector3(b.velocity.x, b.velocity.y, b.velocity.z).add(w.clone().cross(r));
+  const desired = err.multiplyScalar(14).add(hand.vel); if (desired.length() > 9) desired.setLength(9);
+  vPivot.lerp(desired, alpha);
+  const vC = vPivot.sub(w.clone().cross(r));
+  b.velocity.set(vC.x, vC.y, vC.z);
+  if (held.grip.firm) {
+    // firm grip: the object turns with your wrist
+    const qt = hand.q.clone().multiply(held.hRel), dq = qt.multiply(q.clone().invert());
+    if (dq.w < 0) { dq.x = -dq.x; dq.y = -dq.y; dq.z = -dq.z; dq.w = -dq.w; }
+    const ang = 2 * Math.acos(clamp(dq.w, -1, 1)), s = Math.sqrt(1 - dq.w * dq.w);
+    const wd = s > 1e-4 ? new T.Vector3(dq.x / s, dq.y / s, dq.z / s).multiplyScalar(ang * 10) : new T.Vector3();
+    w.lerp(wd, alpha);
+  } else w.multiplyScalar(0.96);                         // pinched: free to dangle and swing
+  b.angularVelocity.set(w.x, w.y, w.z);
+  b.wakeUp();
+  // too heavy / yanked too fast → it slips out
+  held.far = dist > 0.12 + it.r * 0.5 ? held.far + dt : 0;
+  if (held.far > 0.25) { releaseGrab(); showHint('It slipped!', 1000); return; }
+  // eat / drink when brought up to the camera
+  const toCam = bodyPos(b).distanceTo(camPos);
+  if (toCam < 0.17 && now - lastEat > 650) {
     lastEat = now;
-    if (it.spec.edible) { const n = bite(it); if (held && held.mode === 'phone') { held.len = held.baseLen = 0.3; held.local.setLength(0.3); held.startY = held.curY; } if (!n) held = null; }
-    else if (it.spec === SPECS.soda) { sip(it); if (held && held.mode === 'phone') { held.len = held.baseLen = 0.3; held.local.setLength(0.3); held.startY = held.curY; } }
+    if (it.spec.edible) { const n = bite(it); if (!n) held = null; }
+    else if (it.spec === SPECS.soda) sip(it);
   }
 }
 function snapHeld() {
-  if (!held || !held.target || !items.includes(held.item)) return;
+  if (!held || held.mode !== 'drag' || !held.target || !items.includes(held.item)) return;
   const b = held.item.body, t = held.target, q = held.q;
   b.position.set(t.x, t.y, t.z); b.quaternion.set(q.x, q.y, q.z, q.w);
 }
@@ -1822,12 +1981,11 @@ const hand = {
   lm: null, lmT: null, p3: null, p3T: null, depth: 0, px: 60,
   q: new T.Quaternion(), qT: new T.Quaternion(), palmC: new T.Vector3(), palmN: new T.Vector3(0, 1, 0), xAx: new T.Vector3(1, 0, 0),
   pinchP: new T.Vector3(), anchor: new T.Vector3(), anchorPrev: null,
-  pinchOn: false, fistOn: false, grip: 'open', newGrip: 'open', hover: null,
+  pinchOn: false, fistOn: false, grip: 'open', newGrip: 'open', hover: null, vel: new T.Vector3(), touching: false,
 };
 const handTips = { active: false, pts: TIPS.map(() => ({ p: new T.Vector3(), prev: new T.Vector3(), v: new T.Vector3() })) };
 const handTray = { active: false, pos: new T.Vector3(), q: new T.Quaternion(), invQ: new T.Quaternion(), n: new T.Vector3(0, 1, 0), vel: new T.Vector3(), hx: 0.045, hz: 0.05 };
 let worker = null, landmarker = null, glBinding = null, rb = null;
-let tipBodies = [], palmBody = null, trayBody = null;
 const itemByBody = new Map();
 const pendingCatch = new Set();
 
@@ -1890,15 +2048,9 @@ async function toggleHand() {
     }
     hand.loading = false;
   }
-  if (!palmBody) {
-    const kin = shape => { const b = new C.Body({ mass: 0, type: C.Body.KINEMATIC, material: groundMat, shape }); b.collisionResponse = false; b.position.set(0, -100, 0); world.addBody(b); return b; };
-    tipBodies = TIPS.map(() => kin(new C.Sphere(0.009)));
-    palmBody = kin(new C.Sphere(0.028));
-    trayBody = kin(new C.Box(new C.Vec3(handTray.hx, 0.006, handTray.hz)));
-    trayBody.addEventListener('collide', e => { const it = itemByBody.get(e.body.id); if (it && !(held && held.item === it)) pendingCatch.add(it); });
-  }
+  ensureHandBodies();
   hand.enabled = true; setHandBtn(); hintLock = 0;
-  showHint('Reach in with your other hand. Pinch small things, make a fist for big things, hold your palm flat to carry or catch', 4000);
+  showHint('Reach in with your other hand and close it around things to pick them up. Palm up to carry or catch', 4000);
 }
 function setHandBtn() { const b = $('handBtn'); b.classList.toggle('on', hand.enabled); b.textContent = hand.loading ? '✋ …' : '✋ Hand'; }
 
@@ -2029,35 +2181,78 @@ function processHand(res, depthInfo, now) {
   if (!hand.pinchOn && pinchD < 0.03) hand.pinchOn = true; else if (hand.pinchOn && pinchD > 0.052) hand.pinchOn = false;
   hand.newGrip = hand.fistOn ? 'fist' : hand.pinchOn ? 'pinch' : 'open';
 }
-function findHandTarget(grip) {
-  if (!hand.p3 || !hand.lm) return null;
-  // 1) whatever your fingers overlap on screen
-  const sp = grip === 'fist' ? { x: (hand.lm[0].x + hand.lm[9].x) / 2, y: (hand.lm[0].y + hand.lm[9].y) / 2 } : { x: (hand.lm[4].x + hand.lm[8].x) / 2, y: (hand.lm[4].y + hand.lm[8].y) / 2 };
-  const sx = sp.x * innerWidth, sy = sp.y * innerHeight, focal = projMat.elements[5] * innerHeight / 2, margin = grip === 'fist' ? 50 : 34;
-  let sBest = null, sScore = Infinity;
-  for (const it of items) {
-    if ((held && held.item === it) || it.spec.fixed) continue;
-    const sc = toScreen(it.body.position); if (!sc) continue;
-    const rp = it.r * focal / sc.depth, d2 = Math.hypot(sc.x - sx, sc.y - sy);
-    if (d2 < rp + margin) { const score = d2 / (rp + margin) + Math.abs(sc.depth - hand.depth) * 0.6; if (score < sScore) { sScore = score; sBest = it; } }
+/* Whole-hand physics + natural grips */
+const PALM_PTS = new Set([0, 1, 5, 9, 13, 17]);
+const fingerOf = k => PALM_PTS.has(k) ? 5 : k <= 4 ? 0 : k <= 8 ? 1 : k <= 12 ? 2 : k <= 16 ? 3 : 4;
+const SEGS = [[1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [7, 8], [9, 10], [10, 11], [11, 12], [13, 14], [14, 15], [15, 16], [17, 18], [18, 19], [19, 20]];
+const handBodies = []; // {b, k?:landmark, seg?:[a,b], p:Vector3}
+let palmPlate = null;
+function ensureHandBodies() {
+  if (handBodies.length) return;
+  const mk = r => { const b = new C.Body({ mass: 0, type: C.Body.KINEMATIC, material: handMat, shape: new C.Sphere(r) }); b.collisionFilterGroup = 2; b.collisionResponse = false; b.position.set(0, -100, 0); world.addBody(b); return b; };
+  for (let k = 0; k < 21; k++) handBodies.push({ b: mk(TIPS.includes(k) ? 0.0085 : PALM_PTS.has(k) ? 0.011 : 0.009), k, p: new T.Vector3() });
+  for (const s of SEGS) handBodies.push({ b: mk(0.008), seg: s, p: new T.Vector3() });
+  palmPlate = new C.Body({ mass: 0, type: C.Body.KINEMATIC, material: handMat, shape: new C.Box(new C.Vec3(0.038, 0.006, 0.042)) });
+  palmPlate.collisionFilterGroup = 2; palmPlate.collisionResponse = false; palmPlate.position.set(0, -100, 0); world.addBody(palmPlate);
+  palmPlate.addEventListener('collide', e => { const it = itemByBody.get(e.body.id); if (it && !(held && held.item === it)) pendingCatch.add(it); });
+}
+function focalPx() { return projMat.elements[5] * innerHeight / 2; }
+// Which hand points touch an object (on screen, at a matching distance)
+function handContacts(it) {
+  const sc = toScreen(it.body.position); if (!sc || !hand.lm) return null;
+  if (Math.abs(sc.depth - hand.depth) > it.r + 0.13) return null;
+  const rp = it.r * focalPx() / sc.depth, list = [];
+  for (let k = 0; k < 21; k++) {
+    const x = hand.lm[k].x * innerWidth, y = hand.lm[k].y * innerHeight;
+    if (Math.hypot(x - sc.x, y - sc.y) < rp + 12) list.push(k);
   }
-  if (sBest) return sBest;
-  const pt = grip === 'fist' ? hand.palmC : hand.pinchP, reach = grip === 'fist' ? 0.085 : 0.055;
-  let best = null, bd = Infinity;
-  for (const it of items) {
-    if ((held && held.item === it) || it.spec.fixed) continue;
-    const p = it.body.position, dist = Math.hypot(p.x - pt.x, p.y - pt.y, p.z - pt.z) - it.r;
-    if (dist < reach && dist < bd) { bd = dist; best = it; }
+  return { list, sc, rp };
+}
+// A grip = two hand parts on opposite sides of the object, closed to about the object's size
+function findGrip(it, con) {
+  if (!con || con.list.length < 2) return null;
+  const wl = hand.wl, size = it.r * 2;
+  let best = null;
+  for (let i = 0; i < con.list.length; i++) for (let j = i + 1; j < con.list.length; j++) {
+    const a = con.list[i], b = con.list[j];
+    if (fingerOf(a) === fingerOf(b)) continue;
+    if (!(fingerOf(a) === 0 || fingerOf(b) === 0 || fingerOf(a) === 5 || fingerOf(b) === 5 || Math.abs(fingerOf(a) - fingerOf(b)) === 1)) continue;
+    const ax = hand.lm[a].x * innerWidth - con.sc.x, ay = hand.lm[a].y * innerHeight - con.sc.y;
+    const bx = hand.lm[b].x * innerWidth - con.sc.x, by = hand.lm[b].y * innerHeight - con.sc.y;
+    const cos = (ax * bx + ay * by) / (Math.hypot(ax, ay) * Math.hypot(bx, by) + 1e-6);
+    if (cos > -0.35) continue;                                   // not on opposite sides
+    const gap = d3(wl[a], wl[b]);
+    if (gap > size * 1.2 + 0.012) continue;                     // hand not closed around it yet
+    if (!best || gap < best.gap) best = { a, b, gap };
   }
-  if (best) return best;
-  const dir = lmRay(sp), r = pickRay(dir, 3);
-  if (r && Math.abs(r.dist * dir.dot(viewFwd()) - hand.depth) < 0.15) return r.it;
-  return null;
+  if (!best) return null;
+  best.firm = con.list.length >= 4 || PALM_PTS.has(best.a) || PALM_PTS.has(best.b) || hand.fistOn;
+  return best;
+}
+function gripAnchor(g) { return hand.p3 ? hand.p3[g.a].clone().add(hand.p3[g.b]).multiplyScalar(0.5) : null; }
+let lastTouchBuzz = 0;
+function tryHandGrab(now) {
+  let bestIt = null, bestG = null, touching = false;
+  for (const it of items) {
+    if (it.spec.fixed || (held && held.item === it)) continue;
+    const con = handContacts(it); if (!con || !con.list.length) continue;
+    touching = true;
+    const g = findGrip(it, con);
+    if (g && (!bestG || g.gap < bestG.gap)) { bestG = g; bestIt = it; }
+  }
+  if (touching && !hand.touching && now - lastTouchBuzz > 200) { lastTouchBuzz = now; buzz(6); }
+  hand.touching = touching;
+  if (bestIt) { startGrab(bestIt, 'hand', bestG); return true; }
+  return false;
 }
 const _m4 = new T.Matrix4(), _x = new T.Vector3(), _y = new T.Vector3(), _z = new T.Vector3();
 function updateHand(dt, now) {
   if (!hand.enabled || !hand.p3 || !hand.p3T) { setHandColliders(false, dt); occU.uHandOn.value = 0; return; }
-  for (let k = 0; k < 21; k++) { hand.p3[k].copy(hand.p3T[k]); hand.lm[k].x = hand.lmT[k].x; hand.lm[k].y = hand.lmT[k].y; }
+  for (let k = 0; k < 21; k++) {
+    // tiny tracking jitter is ignored so things resting against your hand can settle
+    if (hand.p3[k].distanceToSquared(hand.p3T[k]) > 0.004 * 0.004) hand.p3[k].lerp(hand.p3T[k], 0.75);
+    hand.lm[k].x = lerp(hand.lm[k].x, hand.lmT[k].x, 0.8); hand.lm[k].y = lerp(hand.lm[k].y, hand.lmT[k].y, 0.8);
+  }
   const P = hand.p3, wl = hand.wl;
   hand.palmC.copy(P[0]).add(P[5]).add(P[9]).add(P[13]).add(P[17]).multiplyScalar(0.2);
   const toW = (a, b) => new T.Vector3(b.x - a.x, -(b.y - a.y), -(b.z - a.z)).applyQuaternion(camQuat);
@@ -2068,19 +2263,25 @@ function updateHand(dt, now) {
   hand.xAx.copy(_x);
   hand.palmN.copy(_z.y >= 0 ? _z : _z.negate());
   hand.pinchP.copy(P[4]).add(P[8]).multiplyScalar(0.5);
-  hand.anchor.copy(hand.grip === 'fist' ? hand.palmC : hand.pinchP);
   hand.px = Math.hypot((hand.lm[0].x - hand.lm[9].x) * innerWidth, (hand.lm[0].y - hand.lm[9].y) * innerHeight);
-  // Grip changes → grab / release
-  if (hand.newGrip !== hand.grip) {
-    hand.grip = hand.newGrip;
-    hand.anchor.copy(hand.grip === 'fist' ? hand.palmC : hand.pinchP);
-    if (held && held.mode === 'hand' && hand.grip !== held.grip) releaseGrab();
-    if (!held && hand.grip !== 'open') {
+  // hand velocity (for throws)
+  const anc = (held && held.mode === 'hand' && held.grip && gripAnchor(held.grip)) || hand.palmC.clone();
+  if (hand.prevAnc) { const v = anc.clone().sub(hand.prevAnc).divideScalar(Math.max(dt, 1e-3)); hand.vel.lerp(v, 0.5); if (hand.vel.length() > 9) hand.vel.setLength(9); }
+  hand.prevAnc = anc;
+  // grabbing / releasing
+  const gestureStart = hand.newGrip !== hand.grip && hand.newGrip !== 'open';
+  const gestureEnd = hand.newGrip !== hand.grip && hand.newGrip === 'open';
+  hand.grip = hand.newGrip;
+  if (held && held.mode === 'hand') {
+    const g = held.grip;
+    const opened = g.gesture ? gestureEnd : d3(wl[g.a], wl[g.b]) > g.gap + 0.03;
+    if (opened || hand.grip === 'open' && g.gesture) releaseGrab();
+  } else if (!held) {
+    if (!tryHandGrab(now) && gestureStart) {
+      // pinch / fist gestures still work on whatever you're over
       const t = findHandTarget(hand.grip);
-      if (t) {
-        if (hand.grip === 'pinch' && t.r > 0.13) showHint('That\'s big. Make a fist to grab it', 1600);
-        else { startGrab(t, 'hand', hand.anchor); held.grip = hand.grip; }
-      }
+      if (t) startGrab(t, 'hand', { a: hand.grip === 'fist' ? 9 : 4, b: hand.grip === 'fist' ? 0 : 8, gap: 0, firm: hand.grip === 'fist', gesture: true });
+      else if (!grabStuckDart() && selected === 'darts' && hand.grip === 'pinch') spawnDartInHand();
     }
   }
   hand.hover = held ? null : findHandTarget(hand.fistOn ? 'fist' : 'pinch');
@@ -2088,16 +2289,28 @@ function updateHand(dt, now) {
   setHandColliders(true, dt);
   drawHandMask();
 }
-function setHandColliders(on, dt) {
-  if (!palmBody) return;
-  const active = on && opts.handPush && !(held && held.mode === 'hand') && hand.grip === 'open';
-  handTips.active = on;
-  for (let i = 0; i < 5; i++) {
-    const tp = handTips.pts[i];
-    if (on) { tp.prev.copy(tp.p); tp.p.copy(hand.p3[TIPS[i]]); tp.v.copy(tp.p).sub(tp.prev).divideScalar(Math.max(dt, 1e-3)); if (tp.v.length() > 6) tp.v.setLength(6); }
-    moveKin(tipBodies[i], active, tp.p, dt);
+function findHandTarget(grip) {
+  if (!hand.p3 || !hand.lm) return null;
+  const sp = grip === 'fist' ? { x: (hand.lm[0].x + hand.lm[9].x) / 2, y: (hand.lm[0].y + hand.lm[9].y) / 2 } : { x: (hand.lm[4].x + hand.lm[8].x) / 2, y: (hand.lm[4].y + hand.lm[8].y) / 2 };
+  const sx = sp.x * innerWidth, sy = sp.y * innerHeight, margin = grip === 'fist' ? 50 : 34;
+  let sBest = null, sScore = Infinity;
+  for (const it of items) {
+    if ((held && held.item === it) || it.spec.fixed) continue;
+    const sc = toScreen(it.body.position); if (!sc) continue;
+    const rp = it.r * focalPx() / sc.depth, d2 = Math.hypot(sc.x - sx, sc.y - sy);
+    if (d2 < rp + margin) { const score = d2 / (rp + margin) + Math.abs(sc.depth - hand.depth) * 0.6; if (score < sScore) { sScore = score; sBest = it; } }
   }
-  const trayOn = active && hand.palmN.y > 0.55;
+  return sBest;
+}
+function setHandColliders(on, dt) {
+  if (!palmPlate) return;
+  const active = on && opts.handPush;
+  handTips.active = on;
+  if (on) for (let i = 0; i < 5; i++) { const tp = handTips.pts[i]; tp.prev.copy(tp.p); tp.p.copy(hand.p3[TIPS[i]]); tp.v.copy(tp.p).sub(tp.prev).divideScalar(Math.max(dt, 1e-3)); if (tp.v.length() > 6) tp.v.setLength(6); }
+  for (const hb of handBodies) {
+    if (on) { if (hb.seg) hb.p.copy(hand.p3[hb.seg[0]]).add(hand.p3[hb.seg[1]]).multiplyScalar(0.5); else hb.p.copy(hand.p3[hb.k]); }
+    moveKin(hb.b, active, hb.p, dt);
+  }
   if (on) {
     const up = hand.palmN, right = hand.xAx.clone().addScaledVector(up, -hand.xAx.dot(up)).normalize(), fwd = new T.Vector3().crossVectors(right, up);
     _m4.makeBasis(right, up, fwd);
@@ -2106,21 +2319,21 @@ function setHandColliders(on, dt) {
     handTray.pos.copy(hand.palmC).addScaledVector(up, 0.012);
     handTray.vel.copy(handTray.pos).sub(prevPos).divideScalar(Math.max(dt, 1e-3)); if (handTray.vel.length() > 6) handTray.vel.setLength(6);
   }
-  handTray.active = on && hand.palmN.y > 0.55 && hand.grip === 'open' && !(held && held.mode === 'hand');
-  moveKin(trayBody, trayOn, handTray.pos, dt, handTray.q);
-  moveKin(palmBody, active && !trayOn, hand.palmC, dt);
+  handTray.active = on && hand.palmN.y > 0.55 && !(held && held.mode === 'hand');
+  moveKin(palmPlate, active, handTray.pos, dt, handTray.q);
 }
 function moveKin(b, on, p, dt, q) {
   if (!on) { if (b.collisionResponse) { b.collisionResponse = false; b.position.set(0, -100, 0); b.velocity.set(0, 0, 0); } return; }
   if (!b.collisionResponse) { b.position.set(p.x, p.y, p.z); b.collisionResponse = true; }
-  b.velocity.set((p.x - b.position.x) / dt, (p.y - b.position.y) / dt, (p.z - b.position.z) / dt);
+  const vx = (p.x - b.position.x) / dt, vy = (p.y - b.position.y) / dt, vz = (p.z - b.position.z) / dt, sp = Math.hypot(vx, vy, vz), k = sp > 3 ? 3 / sp : 1;
+  b.velocity.set(vx * k, vy * k, vz * k);
   if (q) b.quaternion.set(q.x, q.y, q.z, q.w);
 }
 function applyCatches() {
   for (const it of pendingCatch) {
     if (!items.includes(it)) continue;
     const v = it.body.velocity;
-    if (v.length() > 0.5) { v.scale(0.3, v); it.body.angularVelocity.scale(0.3, it.body.angularVelocity); if (it.spec.wobble) { it.wob = Math.min(0.35, it.wob + 0.1); it.wobT = 0; } buzz(12); }
+    if (v.length() > 0.5) { v.scale(0.3, v); it.body.angularVelocity.scale(0.3, it.body.angularVelocity); buzz(12); }
   }
   pendingCatch.clear();
 }
@@ -2142,10 +2355,11 @@ function updateHoverRing() {
 }
 function handLost() {
   if (hoverRing) hoverRing.visible = false;
-  hand.lm = null; hand.lmT = null; hand.p3 = null; hand.p3T = null; hand.pinchOn = false; hand.fistOn = false; hand.grip = 'open'; hand.newGrip = 'open'; hand.hover = null; hand.depth = 0; hand.qInit = false;
+  hand.lm = null; hand.lmT = null; hand.p3 = null; hand.p3T = null; hand.pinchOn = false; hand.fistOn = false; hand.grip = 'open'; hand.newGrip = 'open'; hand.hover = null; hand.depth = 0; hand.qInit = false; hand.prevAnc = null; hand.touching = false;
   if (held && held.mode === 'hand') releaseGrab();
   handTray.active = false; handTips.active = false;
-  if (palmBody) { for (const b of [...tipBodies, palmBody, trayBody]) moveKin(b, false); }
+  for (const hb of handBodies) moveKin(hb.b, false);
+  if (palmPlate) moveKin(palmPlate, false);
   occU.uHandOn.value = 0;
 }
 
@@ -2175,7 +2389,7 @@ function drawHandMask() {
   const fwd = viewFwd(); let minZ = Infinity;
   for (const p of hand.p3) minZ = Math.min(minZ, p.clone().sub(camPos).dot(fwd));
   occU.uHandDepth.value = minZ + 0.02;
-  occU.uHandOn.value = 1;
+  occU.uHandOn.value = opts.handFront ? 2 : 1;
 }
 
 /* ============================== FX overlay (trails, hand) ============================== */
@@ -2255,7 +2469,7 @@ for (const key of MENU) {
     selected = key; updateScoreChip();
     bar.querySelectorAll('.item').forEach(x => x.classList.remove('sel')); b.classList.add('sel');
     if (trashMode) setTrash(false);
-    showHint(sp.kind === 'darts' ? '📌 Swipe up to throw darts' : `${sp.emoji} ${sp.label}: tap anywhere, or drag it from here into the room`, 1600);
+    showHint(sp.kind === 'darts' ? '📌 Hold to aim, drag down for power, release. Or pinch with ✋ to throw by hand' : `${sp.emoji} ${sp.label}: tap anywhere, or drag it from here into the room`, 1600);
   };
   bar.appendChild(b);
 }
@@ -2307,6 +2521,7 @@ touch.addEventListener('pointerdown', e => {
   }
   $('settings').style.display = 'none';
   const it = pickScreen(e.clientX, e.clientY);
+  if (selected === 'darts' && !trashMode) { AIM.on = true; AIM.x0 = e.clientX; AIM.y0 = e.clientY; AIM.power = 0.55; AIM.side = 0; AIM.t0 = performance.now(); AIM.sweet = false; }
   pDown = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), item: it, moved: false, timer: null, path: [{ x: e.clientX, y: e.clientY, t: performance.now() }] };
 
 });
@@ -2314,6 +2529,7 @@ touch.addEventListener('pointermove', e => {
   if (!pDown || e.pointerId !== pDown.id) return;
   const now = performance.now();
   if (held && held.mode === 'drag') { held.sx = e.clientX; held.sy = e.clientY; return; }
+  if (AIM.on) { AIM.power = clamp(0.55 + (e.clientY - AIM.y0) / 360, 0.02, 1); AIM.side = clamp((e.clientX - AIM.x0) / 260, -1, 1); }
   pDown.path.push({ x: e.clientX, y: e.clientY, t: now });
   if (Math.hypot(e.clientX - pDown.x, e.clientY - pDown.y) > 12) {
     pDown.moved = true;
@@ -2353,15 +2569,16 @@ function endPointer(e) {
     if (pDown.moved) {
       const p = pDown.path; let L = 0; for (let i = 1; i < p.length; i++) L += Math.hypot(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y);
       const dy = e.clientY - pDown.y, dx = e.clientX - pDown.x;
-      if (selected === 'darts' && dy < -50 && -dy > Math.abs(dx) * 0.8) {
+      if (selected === 'darts' && dy < -50 && -dy > Math.abs(dx) * 0.8 && now - pDown.t < 300) {
         const tail = p.filter(q => now - q.t < 120), a0 = tail.length > 1 ? tail[0] : p[0];
         throwDart(e.clientX - a0.x, e.clientY - a0.y, now - a0.t);
-      } else if (L > 60 && now - pDown.t < 800 && !trashMode) doSwipe(p);
+      } else if (selected === 'darts') throwAimed();
+      else if (L > 60 && now - pDown.t < 800 && !trashMode) doSwipe(p);
     } else if (pDown.item && items.includes(pDown.item)) {
       if (trashMode) { removeItem(pDown.item, true); sfx.poof(); buzz(20); updateScoreChip(); } else if (!pDown.item.spec.fixed) tap(pDown.item);
-    } else if (!trashMode) { if (selected === 'darts') showHint('Swipe up to throw a dart', 1200); else placeAtReticle(e.clientX, e.clientY); }
+    } else if (!trashMode) { if (selected === 'darts') throwAimed(); else placeAtReticle(e.clientX, e.clientY); }
   }
-  pDown = null;
+  pDown = null; AIM.on = false;
 }
 touch.addEventListener('pointerup', endPointer);
 touch.addEventListener('pointercancel', endPointer);
@@ -2474,7 +2691,7 @@ renderer.setAnimationLoop((t, frame) => {
         $('hint').textContent = held ? (held.mode === 'hand' ? 'Turn your wrist to rotate. Open your hand to drop' : 'Lift your finger to drop it')
           : trashMode ? 'Trash mode: tap items to remove them'
           : (hand.enabled && hand.lm) ? (hand.hover ? (hand.hover.r > 0.13 ? `Make a fist to grab the ${hand.hover.spec.label.toLowerCase()}` : `Pinch to grab the ${hand.hover.spec.label.toLowerCase()}`) : handTray.active ? 'Palm up: things can sit in your hand' : 'Reach toward something. Pinch or make a fist')
-          : selected === 'darts' ? '📌 Swipe up to throw' : `Tap to place ${SPECS[selected].emoji} · drag things to move them · swipe to slice`;
+          : selected === 'darts' ? (hand.enabled && hand.lm ? '📌 Pinch to take a dart, then throw' : '📌 Hold to aim, drag down for power, release to throw') : `Tap to place ${SPECS[selected].emoji} · drag things to move them · swipe to slice`;
       }
     }
     ring.rotation.y += dt * 1.5;
@@ -2487,22 +2704,26 @@ renderer.setAnimationLoop((t, frame) => {
   }
   updateHand(dt, now);
   updateHeld(dt, now);
-  world.step(1 / 60, dt, 4);
+  world.step(1 / 90, dt, 6);
   if (pendingBreak.size) { for (const it of [...pendingBreak]) shatter(it); pendingBreak.clear(); }
   applyCatches();
   snapHeld();
   updateVoxels(now);
   updateDarts(dt, now);
+  updateDartFx(dt);
+  updateAimVisuals();
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i], b = it.body;
     it.mesh.position.set(b.position.x, b.position.y, b.position.z);
     it.mesh.quaternion.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
-    if (it.wob > 0.002) {
+    if (held && held.item === it && held.mode === 'hand' && it.spec.edible && it.spec.wobble) it.inner.scale.lerp(new T.Vector3(1.05, 0.93, 1.05), 0.2);
+    else if (it.wob > 0.002) {
       it.wobT += dt;
       const w = it.wob * Math.sin(it.wobT * (it.spec.wobble > 1 ? 14 : 22)) * Math.exp(-it.wobT * (it.spec.wobble > 1 ? 2.2 : 5));
       it.inner.scale.set(1 + w * 0.5, 1 - w, 1 + w * 0.5);
       if (it.wobT > 3) { it.wob = 0; it.inner.scale.set(1, 1, 1); }
     }
+    else if (Math.abs(it.inner.scale.y - 1) > 0.002) it.inner.scale.lerp(new T.Vector3(1, 1, 1), 0.2);
     if ((floorY !== null && b.position.y < floorY - 3) || (it.spec.life && now - it.born > it.spec.life)) removeItem(it);
   }
   for (let i = crumbs.length - 1; i >= 0; i--) {
